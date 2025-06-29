@@ -1,0 +1,23 @@
+// components/SelectFilter.tsx
+import React from 'react';
+
+interface SelectFilterProps {
+  // Define any props this component will receive. For example:
+  value: string;
+  onChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  options: string[];
+}
+
+const SelectFilter: React.FC<SelectFilterProps> = ({ value, onChange, options }) => {
+  return (
+    <select value={value} onChange={onChange} className="your-custom-class">
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {option}
+        </option>
+      ))}
+    </select>
+  );
+};
+
+export default SelectFilter;

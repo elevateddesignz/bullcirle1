@@ -1,0 +1,222 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: light dark;
+  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  line-height: 1.5;
+  font-weight: 400;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+}
+
+@layer base {
+  body {
+    @apply bg-gray-50 dark:bg-brand-dark text-gray-900 dark:text-white transition-colors duration-200;
+  }
+}
+
+@layer components {
+  .btn {
+    @apply px-4 py-2 rounded-lg font-medium transition-all duration-200;
+  }
+
+  .btn-primary {
+    @apply bg-brand-primary hover:bg-brand-accent text-black;
+  }
+
+  .btn-secondary {
+    @apply bg-gray-100 hover:bg-gray-200 text-gray-700 dark:bg-gray-700 dark:hover:bg-gray-600 dark:text-white;
+  }
+
+  .card {
+    @apply bg-white dark:bg-brand-dark-card rounded-xl border border-gray-200 dark:border-brand-dark-border shadow-sm;
+  }
+
+  .input {
+    @apply bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-brand-dark-border rounded-lg px-4 py-2 text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-brand-primary/50 focus:border-transparent transition-colors;
+  }
+
+  .text-muted {
+    @apply text-gray-500 dark:text-gray-400;
+  }
+
+  .hover-card {
+    @apply hover:bg-gray-100 dark:hover:bg-brand-dark-hover transition-colors duration-200;
+  }
+
+  .card-hover {
+    @apply hover:border-brand-primary/50 dark:hover:border-brand-primary/50 hover:shadow-glow dark:hover:shadow-glow transition-all duration-200;
+  }
+
+  .card-active {
+    @apply border-brand-primary dark:border-brand-primary bg-brand-primary/5 dark:bg-brand-primary/10;
+  }
+
+  .btn-outline {
+    @apply border border-gray-200 dark:border-gray-700 hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300;
+  }
+
+  .btn-ghost {
+    @apply hover:bg-gray-100 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300;
+  }
+
+  .select {
+    @apply bg-white dark:bg-gray-800/50 border border-gray-200 dark:border-brand-dark-border rounded-lg px-4 py-2 text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-brand-primary/50 focus:border-transparent transition-colors;
+  }
+
+  .checkbox {
+    @apply rounded border-gray-300 dark:border-gray-600 text-brand-primary focus:ring-brand-primary/50;
+  }
+
+  .badge {
+    @apply px-2 py-1 rounded-full text-xs font-medium;
+  }
+
+  .badge-primary {
+    @apply bg-brand-primary/20 text-brand-primary;
+  }
+
+  .badge-success {
+    @apply bg-green-100 dark:bg-green-900/20 text-green-600 dark:text-green-400;
+  }
+
+  .badge-error {
+    @apply bg-red-100 dark:bg-red-900/20 text-red-600 dark:text-red-400;
+  }
+
+  .nav-link {
+    @apply flex items-center gap-2 px-4 py-2 rounded-lg transition-colors duration-200 text-gray-700 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800;
+  }
+
+  .nav-link-active {
+    @apply bg-brand-primary/10 text-brand-primary;
+  }
+
+  /* Automation Bot styles */
+  .auto-bot-container {
+    @apply max-w-xl mx-auto my-8 p-6 rounded-lg shadow bg-white dark:bg-gray-900 text-gray-900 dark:text-gray-100;
+  }
+
+  .auto-bot-header {
+    @apply mb-4;
+  }
+
+  .auto-bot-title {
+    @apply text-2xl font-bold flex items-center gap-2;
+  }
+
+  .auto-bot-spinner {
+    @apply animate-spin;
+  }
+
+  .auto-bot-settings {
+    @apply space-y-4 mb-6;
+  }
+
+  .auto-bot-toggle {
+    @apply flex items-center gap-2 font-medium;
+  }
+
+  .auto-bot-group {
+    @apply flex items-center justify-between;
+  }
+
+  .auto-bot-input {
+    @apply w-24 p-1 border rounded;
+  }
+
+  .auto-bot-error {
+    @apply p-2 bg-red-100 border border-red-400 text-red-700 rounded;
+  }
+
+  .auto-bot-log-wrapper {
+    @apply mb-4;
+  }
+
+  .auto-bot-log-title {
+    @apply text-lg font-semibold mb-2;
+  }
+
+  .auto-bot-log {
+    @apply h-56 overflow-y-auto border rounded p-2 bg-gray-50 dark:bg-gray-800 text-xs whitespace-pre-wrap;
+  }
+
+  .auto-bot-log-empty {
+    @apply italic text-gray-500;
+  }
+
+  .auto-bot-footer {
+    @apply flex justify-end gap-2;
+  }
+
+  /* wrap both logs side by side */
+  .auto-bot-logs {
+    @apply flex gap-4 mb-6;
+  }
+
+  /* Strategy log styles */
+  .auto-bot-strategy-log-wrapper {
+    @apply mb-4;
+  }
+  .auto-bot-strategy-title {
+    @apply text-lg font-semibold mb-2;
+  }
+  .auto-bot-strategy-log {
+    @apply h-56 overflow-y-auto border rounded p-2 bg-gray-50 dark:bg-gray-800 text-xs whitespace-pre-wrap;
+  }
+
+  /* Card header with gradient */
+  .card-header {
+    @apply bg-gradient-to-r from-gray-100 to-gray-200 dark:from-gray-800 dark:to-gray-900 px-4 py-2 rounded-t-lg;
+  }
+  /* Card body padding */
+  .card-content {
+    @apply p-4;
+  }
+  /* Larger buttons */
+  .btn-lg {
+    @apply px-6 py-3 text-lg;
+  }
+}
+
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(-10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.animate-fadeIn {
+  animation: fadeIn 0.2s ease-out forwards;
+}
+
+@keyframes marquee {
+  0% {
+    transform: translateX(0);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+.animate-marquee {
+  animation: marquee 30s linear infinite;
+}
