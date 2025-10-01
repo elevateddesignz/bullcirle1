@@ -1,0 +1,43 @@
+{
+  "name": "bullcircle-backend",
+  "version": "1.0.0",
+  "type": "module",
+  "description": "Backend API for BullCircle using Bun",
+  "main": "index.js",
+  "scripts": {
+    "dev": "bun run index.js",
+    "watch": "bunx bun-watch index.js",
+    "start": "bun run index.js",
+    "build": "bun run index.js"
+  },
+  "keywords": [
+    "bullcircle",
+    "trading",
+    "api",
+    "alpaca",
+    "bun"
+  ],
+  "author": "Your Name",
+  "license": "MIT",
+  "dependencies": {
+    "apexcharts": "^4.5.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.21.2",
+    "node-cron": "^3.0.3",
+    "node-fetch": "^3.3.2",
+    "openai": "^4.95.0",
+    "python-shell": "^5.0.0",
+    "react-apexcharts": "^1.7.0",
+    "react-sparklines": "^1.7.0",
+    "stripe": "^18.0.0",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.1",
+    "@types/node": "^22.14.1",
+    "nodemon": "^3.1.9",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.8.3"
+  }
+}
