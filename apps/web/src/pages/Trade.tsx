@@ -31,6 +31,8 @@ import { useEnvMode } from '../contexts/EnvModeContext';
 import { useWatchlist } from '../contexts/WatchlistContext';
 
 export default function Trade() {
+  const backendUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL;
+  const backendOrigin = backendUrl ? new URL(backendUrl).origin : undefined;
   const [searchParams] = useSearchParams();
   const { setSearchQuery } = useSearch();
   const { envMode } = useEnvMode();
@@ -77,6 +79,8 @@ export default function Trade() {
 
   // buying power
   const [balance, setBalance] = useState(0);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'missing' | 'loading'>('loading');
+  const [isStartingOAuth, setIsStartingOAuth] = useState(false);
   
   // trade history
   const [tradeHistory, setTradeHistory] = useState<any[]>([]);
@@ -106,27 +110,23 @@ export default function Trade() {
 
   const fetchAccountData = async () => {
     try {
-      const resp = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/account?mode=${envMode}`
-      );
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const { account } = await resp.json();
+      setConnectionStatus('loading');
+      const connection = await api.getAlpacaConnection(envMode as 'paper' | 'live');
+      if (!connection.connected) {
+        setConnectionStatus('missing');
+        setBalance(0);
+        setTradeHistory([]);
+        return;
+      }
+      setConnectionStatus('connected');
+      const { account, orders } = await api.fetchAlpacaAccount(envMode as 'paper' | 'live');
       setBalance(parseFloat(account.buying_power));
-    } catch {
-      setBalance(0);
-    }
-  };
-
-  const fetchTradeHistory = async () => {
-    try {
-      const resp = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/account?mode=${envMode}`
-      );
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const { orders } = await resp.json();
       setTradeHistory(orders?.slice(0, 5) || []);
     } catch (err) {
-      console.error('Failed to fetch trade history:', err);
+      console.error('Failed to fetch account data:', err);
+      setConnectionStatus('missing');
+      setBalance(0);
+      setTradeHistory([]);
     }
   };
 
@@ -137,11 +137,9 @@ export default function Trade() {
     setFormData(f => ({ ...f, symbol: sym }));
     fetchStockData(sym);
     fetchAccountData();
-    fetchTradeHistory();
     const iv = setInterval(() => {
       fetchStockData(sym);
       fetchAccountData();
-      fetchTradeHistory();
     }, 30_000);
     return () => clearInterval(iv);
   }, [searchParams, envMode]);
@@ -157,6 +155,12 @@ export default function Trade() {
         ? currentPrice
         : parseFloat(formData.limitPrice || formData.stopPrice || '0');
     const cost = parseFloat(formData.shares) * validationPrice;
+    if (connectionStatus !== 'connected') {
+      setError('Connect your Alpaca account before trading.');
+      setIsSubmitting(false);
+      return;
+    }
+
     if (cost > balance) {
       setError('Insufficient funds');
       setIsSubmitting(false);
@@ -192,9 +196,6 @@ export default function Trade() {
       setBalance(b => b - cost);
       setShowOrderForm(false);
       
-      // Refresh trade history
-      fetchTradeHistory();
-
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Trade failed');
     } finally {
@@ -213,7 +214,31 @@ export default function Trade() {
   const handleRefresh = () => {
     fetchStockData(currentSymbol);
     fetchAccountData();
-    fetchTradeHistory();
+  };
+
+  const handleConnectClick = async () => {
+    try {
+      setIsStartingOAuth(true);
+      const { url } = await api.startAlpacaOAuth(envMode as 'paper' | 'live', window.location.href);
+      const popup = window.open(url, 'alpaca-connect', 'width=480,height=720');
+      if (!popup) {
+        throw new Error('Unable to open authorization window. Allow pop-ups and try again.');
+      }
+      const listener = (event: MessageEvent) => {
+        const allowedOrigins = [backendOrigin, 'https://app.alpaca.markets'].filter(Boolean);
+        if (!allowedOrigins.includes(event.origin)) return;
+        if (event.data?.ok) {
+          fetchAccountData();
+          window.removeEventListener('message', listener);
+          popup.close();
+        }
+      };
+      window.addEventListener('message', listener);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start Alpaca connection');
+    } finally {
+      setIsStartingOAuth(false);
+    }
   };
 
   // Calculate estimated cost
@@ -277,6 +302,32 @@ export default function Trade() {
             </div>
           </div>
         </div>
+
+        {connectionStatus !== 'connected' && (
+          <div className="mb-6">
+            <div className="p-4 rounded-xl border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+              <div>
+                <h3 className="text-lg font-semibold text-yellow-800 dark:text-yellow-200">Connect your Alpaca account</h3>
+                <p className="text-sm text-yellow-700 dark:text-yellow-300">
+                  Authorize BullCircle to access your {envMode} account to enable trading, balances, and position sync.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                {connectionStatus === 'loading' ? (
+                  <span className="text-yellow-700 dark:text-yellow-200 text-sm">Checking connection...</span>
+                ) : (
+                  <button
+                    onClick={handleConnectClick}
+                    disabled={isStartingOAuth}
+                    className="px-4 py-2 rounded-md bg-yellow-600 text-white hover:bg-yellow-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
+                  >
+                    {isStartingOAuth ? 'Opening…' : 'Connect Alpaca'}
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           {/* Main Chart Section */}

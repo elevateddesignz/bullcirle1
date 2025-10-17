@@ -99,6 +99,29 @@ if (!backendBaseUrl) {
   throw new Error('Missing backend URL environment variable (VITE_BACKEND_URL or VITE_API_URL)');
 }
 
+const jsonHeaders = { 'Content-Type': 'application/json' } as const;
+
+async function getAuthHeaders(extra?: Record<string, string>) {
+  const {
+    data: { session },
+  } = await supabase.auth.getSession();
+  if (!session?.access_token) {
+    throw new Error('Authentication required');
+  }
+  return {
+    Authorization: `Bearer ${session.access_token}`,
+    ...extra,
+  } satisfies Record<string, string>;
+}
+
+async function authorizedFetch(path: string, init: RequestInit = {}) {
+  const headers = await getAuthHeaders(init.headers as Record<string, string> | undefined);
+  return fetch(`${backendBaseUrl}${path}`, {
+    ...init,
+    headers,
+  });
+}
+
 // --- Chart Data ---
 interface ChartDataParams {
   symbol: string;
@@ -151,22 +174,24 @@ export const executeTrade = async (
   params: ExecuteTradeParams,
   mode: 'paper' | 'live' = 'paper'
 ) => {
-  const endpoint = `${backendBaseUrl}/api/trade?mode=${mode}`;
-  const response = await fetch(endpoint, {
+  const response = await authorizedFetch(`/api/v2/alpaca/orders`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: jsonHeaders,
     body: JSON.stringify({
-      symbol:      params.symbol,
-      side:        params.side,
-      type:        params.type,
-      time_in_force: params.time_in_force,
-      qty:         params.qty,
-      ...(params.type === 'limit'      && { limit_price: params.limit_price }),
-      ...(params.type === 'stop'       && { stop_price:  params.stop_price  }),
-      ...(params.type === 'stop_limit' && {
-        stop_price:  params.stop_price,
-        limit_price: params.limit_price
-      })
+      env: mode,
+      order: {
+        symbol: params.symbol,
+        side: params.side,
+        type: params.type,
+        time_in_force: params.time_in_force,
+        qty: params.qty,
+        ...(params.type === 'limit' && { limit_price: params.limit_price }),
+        ...(params.type === 'stop' && { stop_price: params.stop_price }),
+        ...(params.type === 'stop_limit' && {
+          stop_price: params.stop_price,
+          limit_price: params.limit_price,
+        }),
+      },
     }),
   });
   if (!response.ok) {
@@ -174,6 +199,51 @@ export const executeTrade = async (
     throw new Error(`Trade execution failed: ${errorMsg}`);
   }
   return response.json();
+};
+
+export const fetchAlpacaAccount = async (mode: 'paper' | 'live') => {
+  const response = await authorizedFetch(`/api/v2/alpaca/account?env=${mode}`);
+  if (!response.ok) {
+    throw new Error('Failed to load Alpaca account');
+  }
+  return response.json();
+};
+
+export const fetchAlpacaHistory = async (mode: 'paper' | 'live') => {
+  const response = await authorizedFetch(`/api/v2/alpaca/account/history?env=${mode}`);
+  if (!response.ok) {
+    throw new Error('Failed to load Alpaca history');
+  }
+  return response.json();
+};
+
+export const getAlpacaConnection = async (mode: 'paper' | 'live') => {
+  const response = await authorizedFetch(`/api/v2/alpaca/connection?env=${mode}`);
+  if (!response.ok) {
+    throw new Error('Failed to lookup Alpaca connection');
+  }
+  return response.json();
+};
+
+export const disconnectAlpaca = async (mode: 'paper' | 'live') => {
+  const response = await authorizedFetch(`/api/v2/alpaca/connection/${mode}`, {
+    method: 'DELETE',
+  });
+  if (!response.ok) {
+    throw new Error('Failed to disconnect Alpaca');
+  }
+};
+
+export const startAlpacaOAuth = async (mode: 'paper' | 'live', returnTo?: string) => {
+  const response = await authorizedFetch(`/api/v2/alpaca/oauth/start`, {
+    method: 'POST',
+    headers: jsonHeaders,
+    body: JSON.stringify({ env: mode, returnTo }),
+  });
+  if (!response.ok) {
+    throw new Error('Failed to initiate Alpaca OAuth');
+  }
+  return response.json() as Promise<{ url: string; state: string }>;
 };
 
 // ---------- API Export ----------
@@ -185,4 +255,9 @@ export const api = {
   fetchChartData,
   fetchStockData,
   executeTrade,
+  fetchAlpacaAccount,
+  fetchAlpacaHistory,
+  getAlpacaConnection,
+  disconnectAlpaca,
+  startAlpacaOAuth,
 };

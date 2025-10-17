@@ -25,3 +25,6 @@ apps/api/cache/
 
 # Python
 __pycache__/
+apps/api/dist/
+apps/api/.env
+apps/api/coverage/
