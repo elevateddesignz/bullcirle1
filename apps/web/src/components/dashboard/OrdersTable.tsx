@@ -2,8 +2,20 @@
 import React from 'react';
 import { Clock, CheckCircle, XCircle, AlertCircle, TrendingUp, TrendingDown } from 'lucide-react';
 
+interface Order {
+  id: string;
+  symbol: string;
+  qty: number | string;
+  filled_avg_price?: number | string | null;
+  side?: string | null;
+  status?: string | null;
+  type?: string | null;
+  limit_price?: number | string | null;
+  submitted_at?: string | null;
+}
+
 interface OrdersTableProps {
-  orders: any[];
+  orders: Order[];
 }
 
 const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
@@ -50,8 +62,19 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
   return (
     <div className="space-y-3">
       {orders.slice(0, 5).map((order) => {
-        const qty = parseFloat(order.qty || 0);
-        const filledAvgPrice = parseFloat(order.filled_avg_price || 0);
+        const toNumber = (value: number | string | null | undefined): number => {
+          if (typeof value === 'number') {
+            return value;
+          }
+          if (typeof value === 'string') {
+            const parsed = Number.parseFloat(value);
+            return Number.isNaN(parsed) ? 0 : parsed;
+          }
+          return 0;
+        };
+
+        const qty = toNumber(order.qty);
+        const filledAvgPrice = toNumber(order.filled_avg_price);
         const isBuy = order.side?.toLowerCase() === 'buy';
         const total = qty * filledAvgPrice;
 
@@ -100,12 +123,11 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
                   {filledAvgPrice > 0 ? 'Filled Price' : 'Limit Price'}
                 </p>
                 <p className="font-semibold text-gray-900 dark:text-white">
-                  {filledAvgPrice > 0 
+                  {filledAvgPrice > 0
                     ? `$${filledAvgPrice.toFixed(2)}`
-                    : order.limit_price 
-                      ? `$${parseFloat(order.limit_price).toFixed(2)}`
-                      : 'Market'
-                  }
+                    : order.limit_price
+                      ? `$${toNumber(order.limit_price).toFixed(2)}`
+                      : 'Market'}
                 </p>
               </div>
               <div>
@@ -117,10 +139,12 @@ const OrdersTable: React.FC<OrdersTableProps> = ({ orders }) => {
               <div>
                 <p className="text-gray-600 dark:text-gray-400 font-medium">Time</p>
                 <p className="font-semibold text-gray-900 dark:text-white">
-                  {new Date(order.submitted_at).toLocaleTimeString([], { 
-                    hour: '2-digit', 
-                    minute: '2-digit' 
-                  })}
+                  {order.submitted_at
+                    ? new Date(order.submitted_at).toLocaleTimeString([], {
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })
+                    : '—'}
                 </p>
               </div>
             </div>

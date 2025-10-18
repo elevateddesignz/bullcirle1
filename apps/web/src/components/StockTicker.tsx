@@ -60,28 +60,32 @@ export default function StockTicker() {
         }
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP error ${response.status}`);
-        const data = await response.json();
+        const json = (await response.json()) as unknown;
+        if (!json || typeof json !== 'object' || !('quotes' in json)) {
+          throw new Error('Unexpected response structure');
+        }
+        const { quotes } = json as { quotes: Record<string, Record<string, string>> };
 
         const newTickerData = watchlist.map((symbol) => {
-          const quote = data.quotes[symbol];
+          const quote = quotes[symbol];
           if (quote) {
             if (selectedMarket === 'forex') {
               // For Forex, the backend already returns the exchange data object.
-              const price = parseFloat(quote["5. Exchange Rate"]);
+              const price = Number.parseFloat(quote['5. Exchange Rate'] ?? '0');
               return { symbol, price, previousClose: price, change: 0 };
             } else {
-              const price = parseFloat(quote["05. price"]);
-              const previousClose = parseFloat(quote["08. previous close"]);
-              const change = parseFloat(quote["09. change"]);
+              const price = Number.parseFloat(quote['05. price'] ?? '0');
+              const previousClose = Number.parseFloat(quote['08. previous close'] ?? '0');
+              const change = Number.parseFloat(quote['09. change'] ?? '0');
               return { symbol, price, previousClose, change };
             }
           }
           return { symbol, price: 0, previousClose: 0, change: 0 };
         });
         setTickerData(newTickerData);
-      } catch (err) {
-        console.error("Error fetching market data:", err);
-        setError("Error fetching market data");
+      } catch (err: unknown) {
+        console.error('Error fetching market data:', err);
+        setError('Error fetching market data');
       }
     }
 
@@ -113,6 +117,7 @@ export default function StockTicker() {
         key={`${item.symbol}-${index}`}
         onClick={() => {
           // Navigate to the trade page with the selected symbol.
+          handleSymbolSelect(item.symbol);
           navigate(`/trade?symbol=${item.symbol}`);
         }}
         className="inline-flex items-center gap-3 px-4 py-1.5 rounded-lg mx-1 border border-brand-primary/10 hover:border-brand-primary/30 hover:bg-brand-primary/5 transition-all"

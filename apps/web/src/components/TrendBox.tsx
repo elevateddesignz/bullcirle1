@@ -1,12 +1,24 @@
 // src/components/TrendBox.tsx
 import MiniTrendChart from './MiniTrendChart';
 
-export default function TrendBox({ history }: { history: any[] }) {
-  const close = history.map(d => d.close);
-  const volume = history.map(d => d.volume);
-  const avgVol = Math.round(volume.reduce((a, b) => a + b, 0) / volume.length);
-  const change = ((close.at(-1) - close[0]) / close[0] * 100).toFixed(2);
-  const emoji = +change > 2 ? '📈' : +change < -2 ? '📉' : '→';
+interface TrendPoint {
+  close: number;
+  volume: number;
+}
+
+export default function TrendBox({ history }: { history: TrendPoint[] }) {
+  if (history.length === 0) {
+    return null;
+  }
+
+  const close = history.map((point) => point.close);
+  const volume = history.map((point) => point.volume);
+  const avgVol = Math.round(volume.reduce((total, value) => total + value, 0) / volume.length);
+  const lastClose = close[close.length - 1];
+  const firstClose = close[0];
+  const change = firstClose !== 0 ? (((lastClose - firstClose) / firstClose) * 100).toFixed(2) : '0.00';
+  const numericChange = Number.parseFloat(change);
+  const emoji = numericChange > 2 ? '📈' : numericChange < -2 ? '📉' : '→';
 
   return (
     <div className="bg-gray-900 p-3 rounded-xl w-fit text-xs text-white border border-gray-700">

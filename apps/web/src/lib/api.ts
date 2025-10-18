@@ -73,7 +73,7 @@ export const upgradeTier = async (tierId: string) => {
 /**
  * Update user profile settings
  */
-export const updateSettings = async (settings: any) => {
+export const updateSettings = async (settings: Record<string, unknown>) => {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) throw new Error('No user found');
   const { error } = await supabase
@@ -89,9 +89,30 @@ if (!backendBaseUrl) {
   throw new Error('Missing backend URL environment variable (VITE_BACKEND_URL or VITE_API_URL)');
 }
 
-type HeadersRecord = Record<string, string>;
+  market?: string;
+export interface ChartBar {
+  t: string;
+  o: number;
+  h: number;
+  l: number;
+  c: number;
+}
 
-function normalizeApiPath(path: string): string {
+export interface ChartDataResponse {
+  bars: ChartBar[];
+}
+
+export const fetchChartData = async ({ symbol, timeframe, market }: ChartDataParams): Promise<ChartDataResponse> => {
+  const searchParams = new URLSearchParams({ symbol, timeframe });
+  if (market) {
+    searchParams.set('market', market);
+  }
+  const endpoint = `${backendBaseUrl}/api/chart-data?${searchParams.toString()}`;
+  const data = (await response.json()) as unknown;
+  if (!data || typeof data !== 'object' || !Array.isArray((data as { bars?: unknown }).bars)) {
+    return { bars: [] };
+  }
+  return { bars: (data as { bars: ChartBar[] }).bars };
   if (!path.startsWith('/')) {
     return normalizeApiPath(`/${path}`);
   }

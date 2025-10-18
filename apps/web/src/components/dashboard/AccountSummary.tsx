@@ -1,18 +1,18 @@
 // src/components/dashboard/AccountSummary.tsx
 import React from 'react';
-import { 
-  DollarSign, 
-  TrendingUp, 
-  TrendingDown, 
-  Shield, 
-  Activity,
-  CheckCircle,
-  AlertTriangle,
-  Briefcase
-} from 'lucide-react';
+import { DollarSign, TrendingUp, Shield, Activity, CheckCircle, AlertTriangle, Briefcase } from 'lucide-react';
+
+interface AccountSummaryData {
+  portfolio_value?: number | string | null;
+  buying_power?: number | string | null;
+  cash?: number | string | null;
+  daytrading_buying_power?: number | string | null;
+  status?: string | null;
+  pattern_day_trader?: boolean | null;
+}
 
 interface AccountSummaryProps {
-  data: any;
+  data: AccountSummaryData | null;
 }
 
 const AccountSummary: React.FC<AccountSummaryProps> = ({ data }) => {
@@ -34,10 +34,21 @@ const AccountSummary: React.FC<AccountSummaryProps> = ({ data }) => {
     );
   }
 
-  const portfolioValue = parseFloat(data.portfolio_value || 0);
-  const buyingPower = parseFloat(data.buying_power || 0);
-  const cash = parseFloat(data.cash || 0);
-  const dayTradingPower = parseFloat(data.daytrading_buying_power || 0);
+  const toNumber = (value: number | string | null | undefined): number => {
+    if (typeof value === 'number') {
+      return value;
+    }
+    if (typeof value === 'string') {
+      const parsed = Number.parseFloat(value);
+      return Number.isNaN(parsed) ? 0 : parsed;
+    }
+    return 0;
+  };
+
+  const portfolioValue = toNumber(data.portfolio_value);
+  const buyingPower = toNumber(data.buying_power);
+  const cash = toNumber(data.cash);
+  const dayTradingPower = toNumber(data.daytrading_buying_power);
 
   const getStatusColor = (status: string) => {
     switch (status?.toLowerCase()) {

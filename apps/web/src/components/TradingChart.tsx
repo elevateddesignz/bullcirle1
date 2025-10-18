@@ -1,70 +1,140 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import ApexChart from 'react-apexcharts';
+import type { ApexAxisChartSeries, ApexOptions } from 'apexcharts';
 import { useTheme } from '../contexts/ThemeContext';
-import { getMarketQuote, marketFetch } from '../lib/api';
-import type { MarketQuote } from '../lib/api';
-
-// Define supported timeframes and chart types.
-const timeframes = ['1D', '1W', '1M', '1Y'] as const;
-const chartTypes = ['candlestick', 'line', 'area'] as const;
-
-// Define default symbols for each market.
-const defaultSymbols: Record<string, string[]> = {
-  stocks: ['AAPL', 'TSLA', 'AMZN', 'MSFT', 'GOOGL'],
-  crypto: ['BTCUSD', 'ETHUSD', 'XRPUSD', 'LTCUSD', 'BCHUSD'],
-  forex: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'],
-};
-
-function formatPrice(value: number | null | undefined): string {
-  if (typeof value === 'number' && Number.isFinite(value)) {
-    return `$${value.toFixed(2)}`;
-  }
-  return 'N/A';
+import type { ChartBar } from '../lib/api';
+interface CompanyOverview {
+  MarketCapitalization?: string;
+  Volume?: string;
+  PERatio?: string;
 }
 
-interface TradingChartProps {
-  // The market to use (stocks, crypto, or forex). For extra info, only stocks will show the overview.
-  market?: 'stocks' | 'crypto' | 'forex';
-  // The symbol to chart (defaults to the first symbol of the market if not provided).
-  symbol?: string;
-}
+  const [series, setSeries] = useState<ApexAxisChartSeries>([]);
+  const [overview, setOverview] = useState<CompanyOverview | null>(null);
 
-export default function TradingChart({ market = 'stocks', symbol: initialSymbol }: TradingChartProps) {
-  // Local symbol state; if no symbol is provided, default to the first symbol in the market's list.
-  const [symbol, setSymbol] = useState<string>(initialSymbol || defaultSymbols[market][0]);
-  const [timeframe, setTimeframe] = useState<'1D' | '1W' | '1M' | '1Y'>('1D');
-  const [chartType, setChartType] = useState<'candlestick' | 'line' | 'area'>('candlestick');
-  const [series, setSeries] = useState<any[]>([]);
-  const [showSMA, setShowSMA] = useState(false);
-  const [showRSI, setShowRSI] = useState(false);
-  const { theme } = useTheme();
-  const [quote, setQuote] = useState<MarketQuote | null>(null);
-
-  // When the market prop changes, update the symbol to the default for that market.
-  useEffect(() => {
-    setSymbol(defaultSymbols[market][0]);
-  }, [market]);
-
-  // NEW: When the provided symbol prop changes, update the local symbol state.
-  useEffect(() => {
-    if (initialSymbol) {
-      setSymbol(initialSymbol);
-    }
-  }, [initialSymbol]);
-
-  // Fetch latest quote information for stocks via the authenticated market API.
-  useEffect(() => {
     if (market !== 'stocks') {
-      setQuote(null);
+      setOverview(null);
       return;
     }
 
-    let canceled = false;
+    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) {
+      console.warn('Alpha Vantage API key not found. Please set VITE_ALPHA_VANTAGE_API_KEY in your .env file.');
+      return;
 
-    const loadQuote = async () => {
+    let isActive = true;
+
+    const fetchOverview = async () => {
       try {
-        const data = await getMarketQuote(symbol);
-        if (!canceled) {
+        const res = await fetch(
+          `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${apiKey}`
+        );
+        if (!res.ok) {
+          throw new Error(`Failed to fetch company overview (${res.status})`);
+        }
+        const data = (await res.json()) as unknown;
+        if (!data || typeof data !== 'object' || 'Note' in (data as Record<string, unknown>)) {
+          if (isActive) {
+            setOverview(null);
+          }
+          return;
+        }
+        if (isActive) {
+          setOverview(data as CompanyOverview);
+        }
+      } catch (err) {
+        console.error('Failed to fetch company overview:', err);
+        if (isActive) {
+          setOverview(null);
+        }
+      }
+    };
+
+    fetchOverview();
+
+    return () => {
+      isActive = false;
+    };
+  }, [market, symbol]);
+
+  const timeframeMap = useMemo(
+    () => ({
+      '1D': '1Day',
+      '1W': '1Week',
+      '1M': '1Month',
+      '1Y': '1Year',
+    }),
+    []
+  );
+
+  const fetchChartData = useCallback(async () => {
+        timeframe: timeframeMap[timeframe],
+      const bars: ChartBar[] = Array.isArray(response.bars) ? response.bars : [];
+      if (bars.length === 0) {
+
+      const transformedCandles = bars.map((bar) => ({
+        y: [bar.o, bar.h, bar.l, bar.c] as const,
+
+      const transformedLine = bars.map((bar) => ({
+
+      const smaSeries: ApexAxisChartSeries = showSMA
+        ? [
+            {
+              name: 'SMA (10)',
+              data: bars
+                .map((bar, index, arr) => {
+                  if (index < 9) {
+                    return null;
+                  }
+                  const window = arr.slice(index - 9, index + 1);
+                  const average =
+                    window.reduce((accumulator, item) => accumulator + item.c, 0) / window.length;
+                  return { x: new Date(bar.t), y: Number(average.toFixed(2)) };
+                })
+                .filter((point): point is { x: Date; y: number } => point !== null),
+            },
+          ]
+
+      const prices = bars.map((bar) => bar.c);
+      const rsiValues = showRSI ? calculateRSI(prices) : [];
+      const rsiSeries: ApexAxisChartSeries = showRSI && rsiValues.length > 0
+        ? [
+            {
+              name: 'RSI',
+              data: rsiValues
+                .map((value, index) => {
+                  const bar = bars[index + 14];
+                  if (!bar) {
+                    return null;
+                  }
+                  return { x: new Date(bar.t), y: value };
+                })
+                .filter((point): point is { x: Date; y: number } => point !== null),
+            },
+          ]
+
+      const baseSeries: ApexAxisChartSeries =
+        chartType === 'candlestick'
+          ? [
+              {
+                name: 'Price',
+                data: transformedCandles,
+              },
+            ]
+          : [
+              {
+                name: 'Price',
+                data: transformedLine,
+              },
+            ];
+
+      setSeries([...baseSeries, ...smaSeries, ...rsiSeries]);
+  }, [chartType, market, showRSI, showSMA, symbol, timeframe, timeframeMap]);
+
+  }, [envMode, fetchChartData]);
+  const chartOptions: ApexOptions = {
+    theme: { mode: theme === 'dark' ? 'dark' : 'light' },
+    xaxis: { type: 'datetime' },
           setQuote(data);
         }
       } catch (error) {

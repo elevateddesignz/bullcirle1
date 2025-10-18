@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import {
   BrowserRouter as Router,
   Routes,
@@ -39,7 +39,6 @@ import stripePromise from './stripePromise';
 import CheckoutForm from './components/CheckoutForm';
 
 function AppContent() {
-  const [searchResults, setSearchResults] = useState<any[]>([]);
   const location = useLocation();
   const excludedPaths = ['/', '/login', '/register'];
   const showSearchBar = !excludedPaths.includes(location.pathname);
@@ -49,15 +48,6 @@ function AppContent() {
       {showSearchBar && (
         <div className="px-4 py-2 border-b border-gray-700">
           <SearchBar />
-          {searchResults.length > 0 && (
-            <ul className="bg-white dark:bg-gray-800 mt-2 rounded shadow p-4">
-              {searchResults.map((result, idx) => (
-                <li key={idx}>
-                  {result.name} ({result.symbol})
-                </li>
-              ))}
-            </ul>
-          )}
         </div>
       )}
       <Routes>
