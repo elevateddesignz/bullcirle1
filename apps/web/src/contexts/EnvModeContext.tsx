@@ -1,9 +1,20 @@
-import { createContext, useContext, useState, ReactNode } from 'react';
+import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 
-import { useEffect } from 'react';
 import { supabase } from '../lib/supabaseClient';
 
+/**
+ * Trading environment mode.
+ *
+ * This toggle only affects Alpaca TRADING actions (orders, account, positions).
+ * Market data always comes from the Alpha provider and ignores this setting.
+ */
 export type EnvMode = 'paper' | 'live';
+
+let envModeSnapshot: EnvMode = 'paper';
+
+export function getEnvModeSnapshot(): EnvMode {
+  return envModeSnapshot;
+}
 
 interface EnvModeContextType {
   envMode: EnvMode;
@@ -20,6 +31,8 @@ const EnvModeContext = createContext<EnvModeContextType>({
   setEnvModeExplicit: async () => undefined,
   isSyncing: false,
 });
+
+EnvModeContext.displayName = 'EnvModeContext';
 
 async function persistPreference(mode: EnvMode) {
   try {
@@ -45,6 +58,7 @@ export function EnvModeProvider({ children }: { children: ReactNode }) {
 
     const stored = window.localStorage.getItem(STORAGE_KEY) as EnvMode | null;
     if (stored === 'paper' || stored === 'live') {
+      envModeSnapshot = stored;
       setEnvMode(stored);
       return;
     }
@@ -61,6 +75,7 @@ export function EnvModeProvider({ children }: { children: ReactNode }) {
           .eq('id', user.id)
           .maybeSingle();
         if (data?.env_mode === 'paper' || data?.env_mode === 'live') {
+          envModeSnapshot = data.env_mode;
           setEnvMode(data.env_mode);
           if (typeof window !== 'undefined') {
             window.localStorage.setItem(STORAGE_KEY, data.env_mode);
@@ -75,6 +90,7 @@ export function EnvModeProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const setEnvModeExplicit = async (mode: EnvMode) => {
+    envModeSnapshot = mode;
     setEnvMode(mode);
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, mode);

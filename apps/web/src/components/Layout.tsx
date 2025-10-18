@@ -106,9 +106,10 @@ export default function Layout() {
             </button>
             <button
               onClick={toggleEnvMode}
+              title="Switch trading environment (paper vs live). Market data is unaffected."
               className="px-3 py-1 rounded-md border border-gray-200 dark:border-gray-700 text-sm hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
             >
-              {envMode === 'paper' ? 'Paper' : 'Live'}
+              {envMode === 'paper' ? 'Trading: Paper' : 'Trading: Live'}
             </button>
             <button
               onClick={logout}

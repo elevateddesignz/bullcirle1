@@ -20,34 +20,38 @@ async function main() {
     },
   });
 
-  const fakeAccess = await encrypt('demo-access-token');
-  const fakeRefresh = await encrypt('demo-refresh-token');
+  const fakeAccess = encrypt('demo-access-token');
+  const fakeRefresh = encrypt('demo-refresh-token');
 
-  await prisma.brokerConnection.upsert({
-    where: {
-      userId_provider_env: {
-        userId: demoUserId,
-        provider: 'alpaca',
-        env: 'paper',
-      },
-    },
-    update: {
-      accessTokenEnc: fakeAccess,
-      refreshTokenEnc: fakeRefresh,
-      scopes: ['account', 'trading', 'data'],
-      expiresAt: new Date(Date.now() + 3600 * 1000),
-    },
-    create: {
-      userId: demoUserId,
-      provider: 'alpaca',
-      env: 'paper',
-      accessTokenEnc: fakeAccess,
-      refreshTokenEnc: fakeRefresh,
-      scopes: ['account', 'trading', 'data'],
-      expiresAt: new Date(Date.now() + 3600 * 1000),
-      accountId: 'PA0000DEMO',
-    },
+  const connection = await prisma.brokerConnection.findFirst({
+    where: { userId: demoUserId, broker: 'alpaca', mode: 'paper' },
   });
+
+  if (connection) {
+    await prisma.brokerConnection.update({
+      where: { id: connection.id },
+      data: {
+        accessToken: fakeAccess,
+        refreshToken: fakeRefresh,
+        scope: 'account trading data',
+        expiresAt: new Date(Date.now() + 3600 * 1000),
+        accountId: 'PA0000DEMO',
+      },
+    });
+  } else {
+    await prisma.brokerConnection.create({
+      data: {
+        userId: demoUserId,
+        broker: 'alpaca',
+        mode: 'paper',
+        accessToken: fakeAccess,
+        refreshToken: fakeRefresh,
+        scope: 'account trading data',
+        expiresAt: new Date(Date.now() + 3600 * 1000),
+        accountId: 'PA0000DEMO',
+      },
+    });
+  }
 
   await prisma.courseModule.upsert({
     where: { slug: 'intro-to-trading' },

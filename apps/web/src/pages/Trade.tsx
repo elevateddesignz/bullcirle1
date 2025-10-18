@@ -23,7 +23,8 @@ import {
 import { motion, AnimatePresence } from 'framer-motion';
 import Confetti from 'react-confetti';
 
-import { api } from '../lib/api';
+import { marketFetch, tradeFetch } from '../lib/api';
+import ConnectAlpaca from '../components/ConnectAlpaca';
 import TradingChart from '../components/TradingChart';
 import SearchResults from '../components/SearchResults';
 import { useSearch } from '../contexts/SearchContext';
@@ -31,8 +32,6 @@ import { useEnvMode } from '../contexts/EnvModeContext';
 import { useWatchlist } from '../contexts/WatchlistContext';
 
 export default function Trade() {
-  const backendUrl = import.meta.env.VITE_API_URL || import.meta.env.VITE_BACKEND_URL;
-  const backendOrigin = backendUrl ? new URL(backendUrl).origin : undefined;
   const [searchParams] = useSearchParams();
   const { setSearchQuery } = useSearch();
   const { envMode } = useEnvMode();
@@ -79,8 +78,8 @@ export default function Trade() {
 
   // buying power
   const [balance, setBalance] = useState(0);
-  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'missing' | 'loading'>('loading');
-  const [isStartingOAuth, setIsStartingOAuth] = useState(false);
+  const [connectionStatus, setConnectionStatus] = useState<'connected' | 'missing' | 'loading' | 'error'>('loading');
+  const [connectionError, setConnectionError] = useState<string | null>(null);
   
   // trade history
   const [tradeHistory, setTradeHistory] = useState<any[]>([]);
@@ -89,18 +88,46 @@ export default function Trade() {
   const fetchStockData = async (symbol: string) => {
     try {
       setIsRefreshing(true);
-      const resp = await fetch(
-        `${import.meta.env.VITE_API_URL}/api/alpha-quotes?symbols=${symbol}`
-      );
-      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
-      const data = await resp.json();
-      const q = data.quotes[symbol];
-      const price = parseFloat(q['05. price']);
-      const amt = parseFloat(q['09. change']);
-      const pct = parseFloat((q['10. change percent'] || '0%').replace('%',''));
-      setSymbolData({ name: symbol, price, change: { amount: amt, percentage: pct } });
+      const [quoteRes, tradeRes, barsRes] = await Promise.all([
+        marketFetch(`/market/quote?symbol=${encodeURIComponent(symbol)}`),
+        marketFetch(`/market/trade/latest?symbol=${encodeURIComponent(symbol)}`),
+        marketFetch(`/market/bars?symbol=${encodeURIComponent(symbol)}&timeframe=5Min&limit=60`),
+      ]);
+
+      if (!quoteRes.ok) {
+        throw new Error(`Quote HTTP ${quoteRes.status}`);
+      }
+
+      const tradeJson = tradeRes.ok ? await tradeRes.json() : null;
+      const latestTrade = tradeJson?.trade;
+      const barsPayload = barsRes.ok ? await barsRes.json() : null;
+      const bars = Array.isArray(barsPayload?.bars) ? barsPayload.bars : [];
+      const lastBar = bars[bars.length - 1];
+      const prevBar = bars[bars.length - 2];
+
+      const price = typeof latestTrade?.price === 'number'
+        ? latestTrade.price
+        : typeof lastBar?.c === 'number'
+        ? lastBar.c
+        : 0;
+
+      const changeAmount = lastBar && prevBar
+        ? Number(lastBar.c) - Number(prevBar.c)
+        : 0;
+      const changePercentage = prevBar && prevBar.c
+        ? (changeAmount / Number(prevBar.c)) * 100
+        : 0;
+
+      setSymbolData({
+        name: symbol,
+        price,
+        change: {
+          amount: changeAmount,
+          percentage: changePercentage,
+        },
+      });
       setCurrentPrice(price);
-      setPriceChange({ amount: amt, percentage: pct });
+      setPriceChange({ amount: changeAmount, percentage: changePercentage });
     } catch (err) {
       setError('Failed to load stock data.');
     } finally {
@@ -111,20 +138,46 @@ export default function Trade() {
   const fetchAccountData = async () => {
     try {
       setConnectionStatus('loading');
-      const connection = await api.getAlpacaConnection(envMode as 'paper' | 'live');
-      if (!connection.connected) {
+      setConnectionError(null);
+      const env = envMode === 'live' ? 'live' : 'paper';
+      const accountRes = await tradeFetch('/v2/alpaca/account', { envMode: env });
+
+      if (accountRes.status === 412) {
         setConnectionStatus('missing');
         setBalance(0);
         setTradeHistory([]);
         return;
       }
+
+      if (!accountRes.ok) {
+        throw new Error(`Account HTTP ${accountRes.status}`);
+      }
+
+      const [accountJson, ordersRes] = await Promise.all([
+        accountRes.json(),
+        tradeFetch('/v2/alpaca/orders?status=all&limit=10', { envMode: env }),
+      ]);
+
+      if (ordersRes.status === 412) {
+        setConnectionStatus('missing');
+        setBalance(0);
+        setTradeHistory([]);
+        return;
+      }
+
+      if (!ordersRes.ok) {
+        throw new Error(`Orders HTTP ${ordersRes.status}`);
+      }
+
       setConnectionStatus('connected');
-      const { account, orders } = await api.fetchAlpacaAccount(envMode as 'paper' | 'live');
-      setBalance(parseFloat(account.buying_power));
-      setTradeHistory(orders?.slice(0, 5) || []);
+      const ordersJson = await ordersRes.json();
+      const buyingPower = Number.parseFloat(accountJson?.account?.buying_power ?? '0');
+      setBalance(Number.isFinite(buyingPower) ? buyingPower : 0);
+      setTradeHistory(Array.isArray(ordersJson?.orders) ? ordersJson.orders.slice(0, 5) : []);
     } catch (err) {
       console.error('Failed to fetch account data:', err);
-      setConnectionStatus('missing');
+      setConnectionStatus('error');
+      setConnectionError(err instanceof Error ? err.message : 'Unknown trading error');
       setBalance(0);
       setTradeHistory([]);
     }
@@ -169,23 +222,31 @@ export default function Trade() {
 
     try {
       const { orderType, stopPrice, limitPrice, shares, symbol, timeInForce, type } = formData;
-      const payload: any = {
-        symbol,
+      const env = (envMode === 'live' ? 'live' : 'paper') as 'paper' | 'live';
+      const orderPayload: Record<string, unknown> = {
+        symbol: symbol.trim().toUpperCase(),
         side: type,
         type: orderType,
-        time_in_force: timeInForce,
+        timeInForce,
         qty: parseFloat(shares),
       };
-      if (orderType === 'limit') {
-        payload.limit_price = parseFloat(limitPrice);
-      } else if (orderType === 'stop') {
-        payload.stop_price = parseFloat(stopPrice);
-      } else if (orderType === 'stop_limit') {
-        payload.stop_price  = parseFloat(stopPrice);
-        payload.limit_price = parseFloat(limitPrice);
+      if (orderType === 'limit' || orderType === 'stop_limit') {
+        orderPayload.limitPrice = parseFloat(limitPrice);
+      }
+      if (orderType === 'stop' || orderType === 'stop_limit') {
+        orderPayload.stopPrice = parseFloat(stopPrice);
       }
 
-      await api.executeTrade(payload, envMode as 'paper' | 'live');
+      const response = await tradeFetch('/v2/alpaca/orders', {
+        method: 'POST',
+        envMode: env,
+        body: JSON.stringify({ order: orderPayload }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Trade execution failed');
+      }
+      await response.json();
 
       // play success
       setShowSuccess(true);
@@ -193,9 +254,9 @@ export default function Trade() {
 
       // reset form + balance
       setFormData(f => ({ ...f, shares: '', limitPrice: '', stopPrice: '' }));
-      setBalance(b => b - cost);
+      await fetchAccountData();
       setShowOrderForm(false);
-      
+
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Trade failed');
     } finally {
@@ -214,31 +275,6 @@ export default function Trade() {
   const handleRefresh = () => {
     fetchStockData(currentSymbol);
     fetchAccountData();
-  };
-
-  const handleConnectClick = async () => {
-    try {
-      setIsStartingOAuth(true);
-      const { url } = await api.startAlpacaOAuth(envMode as 'paper' | 'live', window.location.href);
-      const popup = window.open(url, 'alpaca-connect', 'width=480,height=720');
-      if (!popup) {
-        throw new Error('Unable to open authorization window. Allow pop-ups and try again.');
-      }
-      const listener = (event: MessageEvent) => {
-        const allowedOrigins = [backendOrigin, 'https://app.alpaca.markets'].filter(Boolean);
-        if (!allowedOrigins.includes(event.origin)) return;
-        if (event.data?.ok) {
-          fetchAccountData();
-          window.removeEventListener('message', listener);
-          popup.close();
-        }
-      };
-      window.addEventListener('message', listener);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to start Alpaca connection');
-    } finally {
-      setIsStartingOAuth(false);
-    }
   };
 
   // Calculate estimated cost
@@ -280,7 +316,9 @@ export default function Trade() {
             </div>
             <div>
               <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Trade</h1>
-              <p className="text-gray-600 dark:text-gray-400">Execute trades in {envMode.toUpperCase()} mode</p>
+              <p className="text-gray-600 dark:text-gray-400">
+                Execute trades in {envMode === 'live' ? 'live' : 'paper'} trading mode. Market data always stays on Alpha.
+              </p>
             </div>
           </div>
           
@@ -294,37 +332,34 @@ export default function Trade() {
             </button>
             
             <div className={`px-3 py-1 rounded-full text-sm font-medium ${
-              envMode === 'live' 
+              envMode === 'live'
                 ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
                 : 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-300'
             }`}>
-              {envMode.toUpperCase()} Mode
+              Trading: {envMode.toUpperCase()}
             </div>
           </div>
         </div>
 
         {connectionStatus !== 'connected' && (
           <div className="mb-6">
-            <div className="p-4 rounded-xl border border-yellow-300 bg-yellow-50 dark:border-yellow-700 dark:bg-yellow-900/30 flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+            <div className="flex flex-col gap-3 rounded-xl border border-yellow-300 bg-yellow-50 p-4 dark:border-yellow-700 dark:bg-yellow-900/30">
               <div>
                 <h3 className="text-lg font-semibold text-yellow-800 dark:text-yellow-200">Connect your Alpaca account</h3>
                 <p className="text-sm text-yellow-700 dark:text-yellow-300">
-                  Authorize BullCircle to access your {envMode} account to enable trading, balances, and position sync.
+                  Trading mode controls orders only. Market data stays on Alpha, so connect your {envMode} Alpaca account to trade.
                 </p>
               </div>
-              <div className="flex items-center gap-2">
-                {connectionStatus === 'loading' ? (
-                  <span className="text-yellow-700 dark:text-yellow-200 text-sm">Checking connection...</span>
-                ) : (
-                  <button
-                    onClick={handleConnectClick}
-                    disabled={isStartingOAuth}
-                    className="px-4 py-2 rounded-md bg-yellow-600 text-white hover:bg-yellow-700 disabled:opacity-60 disabled:cursor-not-allowed transition"
-                  >
-                    {isStartingOAuth ? 'Opening…' : 'Connect Alpaca'}
-                  </button>
-                )}
-              </div>
+              {connectionStatus === 'loading' ? (
+                <span className="text-sm text-yellow-700 dark:text-yellow-200">Checking connection…</span>
+              ) : (
+                <div className="flex flex-wrap items-center gap-3">
+                  <ConnectAlpaca mode={envMode === 'live' ? 'live' : 'paper'} />
+                  {connectionStatus === 'error' && connectionError && (
+                    <p className="text-sm text-red-700 dark:text-red-300">{connectionError}</p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -491,10 +526,10 @@ export default function Trade() {
                 
                 <div className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-700/30 rounded-xl">
                   <div>
-                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Mode</p>
+                    <p className="text-sm font-medium text-gray-600 dark:text-gray-400">Trading Mode</p>
                     <p className={`text-lg font-bold ${
-                      envMode === 'live' 
-                        ? 'text-red-600 dark:text-red-400' 
+                      envMode === 'live'
+                        ? 'text-red-600 dark:text-red-400'
                         : 'text-green-600 dark:text-green-400'
                     }`}>
                       {envMode.toUpperCase()}

@@ -5,11 +5,14 @@ import path from 'path';
 import OpenAI from 'openai';
 import { getAlphaHistory } from '../lib/alphaHistory.js';
 import { logger } from '../lib/logger.js';
-import { alpacaBase, refreshTokenIfNeeded } from '../lib/alpaca.js';
+import { refreshTokenIfNeeded } from '../lib/alpaca.js';
+import { createPerUserRateLimiter } from '../middleware/rate-limit.js';
+import { recordTradeAudit } from '../utils/trade-audit.js';
 
 const router = Router();
 
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const tradeRateLimiter = createPerUserRateLimiter();
 
 function avURL(func: string, symbol = '', extra = '') {
   return `https://www.alphavantage.co/query?function=${func}&symbol=${symbol}${extra}&apikey=${process.env.ALPHA_VANTAGE_API_KEY}`;
@@ -103,7 +106,7 @@ router.post('/', async (req, res) => {
   }
 });
 
-router.post('/autopilot', async (req, res) => {
+router.post('/autopilot', tradeRateLimiter, async (req, res) => {
   const symbol = (req.body.symbol as string || '').toUpperCase();
   if (!symbol) return res.status(400).json({ error: 'symbol required' });
   const env = req.body.mode === 'live' ? 'live' : 'paper';
@@ -147,11 +150,34 @@ router.post('/autopilot', async (req, res) => {
           time_in_force: 'day',
         })
       );
+      await recordTradeAudit({
+        userId: auth.userId,
+        env,
+        action: 'alpaca.order.autopilot',
+        status: 'success',
+        requestPayload: {
+          symbol,
+          recommendation: result.recommendation,
+          confidence: result.confidence,
+        },
+        responsePayload: tradeResult.data,
+      });
     }
 
     res.json({ symbol, price, volume, history, ...result, tradeResult: tradeResult?.data ?? null });
   } catch (error) {
     logger.error({ err: error }, 'Autopilot trade failed');
+    await recordTradeAudit({
+      userId: auth.userId,
+      env,
+      action: 'alpaca.order.autopilot',
+      status: 'error',
+      requestPayload: {
+        symbol,
+        mode: env,
+      },
+      error,
+    });
     res.status(500).json({ error: error instanceof Error ? error.message : 'autopilot failed' });
   }
 });

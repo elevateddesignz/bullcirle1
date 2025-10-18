@@ -33,6 +33,9 @@ import Watchlist        from '../components/dashboard/Watchlist';
 
 import { Elements } from '@stripe/react-stripe-js';
 import stripePromise from '../stripePromise';
+import { marketFetch, tradeFetch } from '../lib/api';
+
+const MARKET_SYMBOLS = ['SPY', 'QQQ', 'DIA'];
 
 interface SummaryCardProps {
   label: string;
@@ -142,30 +145,81 @@ export default function Dashboard() {
   const [error, setError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState<Date>(new Date());
-
-  const base = import.meta.env.VITE_API_URL ?? '';
+  const [marketClock, setMarketClock] = useState<any | null>(null);
+  const [marketSnapshot, setMarketSnapshot] = useState<Array<{ symbol: string; price: number | null; ts: string | null }>>([]);
 
   const fetchData = async () => {
     if (!user) return;
 
     try {
       setIsLoading(true);
-      const token = localStorage.getItem('token');
-      const headers = token ? { Authorization: `Bearer ${token}` } : {};
+      const env = (envMode === 'live' ? 'live' : 'paper') as 'paper' | 'live';
 
-      // Fetch account data
-      const acctRes = await fetch(`${base}/api/account?mode=${envMode}`, { headers });
-      if (!acctRes.ok) throw new Error(`Account fetch failed: ${acctRes.status}`);
-      const { account, positions, orders } = await acctRes.json();
-      setAccount(account);
-      setPositions(positions);
-      setOrders(orders);
+      const [accountRes, positionsRes, ordersRes, historyRes] = await Promise.all([
+        tradeFetch('/v2/alpaca/account', { envMode: env }),
+        tradeFetch('/v2/alpaca/positions', { envMode: env }),
+        tradeFetch('/v2/alpaca/orders?status=all&limit=10', { envMode: env }),
+        tradeFetch('/account/history', { envMode: env }),
+      ]);
 
-      // Fetch portfolio history
-      const histRes = await fetch(`${base}/api/account/history?mode=${envMode}`, { headers });
-      if (!histRes.ok) throw new Error(`History fetch failed: ${histRes.status}`);
-      const { history } = await histRes.json();
-      setHistory(history);
+      if (!accountRes.ok) throw new Error(`Account fetch failed: ${accountRes.status}`);
+      if (!positionsRes.ok) throw new Error(`Positions fetch failed: ${positionsRes.status}`);
+      if (!ordersRes.ok) throw new Error(`Orders fetch failed: ${ordersRes.status}`);
+      if (!historyRes.ok) throw new Error(`History fetch failed: ${historyRes.status}`);
+
+      const accountJson = await accountRes.json();
+      const positionsJson = await positionsRes.json();
+      const ordersJson = await ordersRes.json();
+      const historyJson = await historyRes.json();
+
+      setAccount(accountJson?.account ?? null);
+      setPositions(Array.isArray(positionsJson?.positions) ? positionsJson.positions : []);
+      setOrders(Array.isArray(ordersJson?.orders) ? ordersJson.orders : []);
+
+      const historyPoints: DataPoint[] = Array.isArray(historyJson?.history)
+        ? historyJson.history
+            .map((item: any) => ({
+              date: item?.date ?? '',
+              value: typeof item?.equity === 'number' ? item.equity : Number.parseFloat(item?.equity ?? '0'),
+            }))
+            .filter(point => point.date && Number.isFinite(point.value))
+        : [];
+      setHistory(historyPoints);
+
+      try {
+        const clockRes = await marketFetch('/clock');
+        if (clockRes.ok) {
+          setMarketClock(await clockRes.json());
+        }
+      } catch (clockError) {
+        console.warn('[Dashboard] Failed to fetch market clock', clockError);
+      }
+
+      try {
+        const snapshot = await Promise.all(
+          MARKET_SYMBOLS.map(async (sym) => {
+            try {
+              const [quoteRes, tradeRes] = await Promise.all([
+                marketFetch(`/market/quote?symbol=${encodeURIComponent(sym)}`),
+                marketFetch(`/market/trade/latest?symbol=${encodeURIComponent(sym)}`),
+              ]);
+              const quoteJson = quoteRes.ok ? await quoteRes.json() : null;
+              const tradeJson = tradeRes.ok ? await tradeRes.json() : null;
+              const trade = tradeJson?.trade;
+              const price = typeof trade?.price === 'number' ? trade.price : null;
+              const ts = typeof trade?.ts === 'string' ? trade.ts : quoteJson?.ts ?? null;
+              return { symbol: sym, price, ts };
+            } catch (snapshotError) {
+              console.warn(`[Dashboard] Market snapshot failed for ${sym}`, snapshotError);
+              return { symbol: sym, price: null, ts: null };
+            }
+          })
+        );
+        setMarketSnapshot(snapshot);
+      } catch (snapshotError) {
+        console.warn('[Dashboard] Failed to load market snapshot', snapshotError);
+        setMarketSnapshot([]);
+      }
 
       setLastUpdated(new Date());
       setError(null);
@@ -182,7 +236,7 @@ export default function Dashboard() {
     // Auto-refresh every 30 seconds
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [user, envMode, base]);
+  }, [user, envMode]);
 
   // Calculate trends for summary cards
   const portfolioTrend = history.length > 1 ? {
@@ -228,7 +282,7 @@ export default function Dashboard() {
                 <div className={`w-2 h-2 rounded-full ${
                   envMode === 'live' ? 'bg-red-500' : 'bg-green-500'
                 } animate-pulse`} />
-                <span className="text-sm font-medium">{envMode.toUpperCase()} Mode</span>
+                <span className="text-sm font-medium">Trading Mode (orders only): {envMode.toUpperCase()}</span>
               </div>
 
               {/* Refresh Button */}
@@ -244,9 +298,24 @@ export default function Dashboard() {
           </div>
 
           {/* Last Updated */}
-          <div className="flex items-center space-x-2 mt-4 text-sm text-gray-500 dark:text-gray-400">
-            <Clock className="w-4 h-4" />
-            <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
+          <div className="flex flex-wrap items-center gap-4 mt-4 text-sm text-gray-500 dark:text-gray-400">
+            <div className="flex items-center space-x-2">
+              <Clock className="w-4 h-4" />
+              <span>Last updated: {lastUpdated.toLocaleTimeString()}</span>
+            </div>
+            {marketClock && (
+              <div className="flex items-center space-x-2">
+                <Clock className="w-4 h-4" />
+                <span>
+                  Market {marketClock.is_open ? 'Open' : 'Closed'}
+                  {marketClock.next_open && (
+                    <span className="ml-2">
+                      Next open: {new Date(marketClock.next_open).toLocaleTimeString()}
+                    </span>
+                  )}
+                </span>
+              </div>
+            )}
           </div>
         </div>
 
@@ -258,6 +327,34 @@ export default function Dashboard() {
               <p className="text-red-700 dark:text-red-300 font-medium">Error loading data</p>
             </div>
             <p className="text-red-600 dark:text-red-400 text-sm mt-1">{error}</p>
+          </div>
+        )}
+
+        {marketSnapshot.length > 0 && (
+          <div className="mb-8">
+            <h2 className="text-xl font-bold text-gray-900 dark:text-white mb-4">Market Snapshot</h2>
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              {marketSnapshot.map(({ symbol, price, ts }) => (
+                <div
+                  key={symbol}
+                  className="bg-white dark:bg-gray-800/50 backdrop-blur-xl rounded-2xl border border-gray-200 dark:border-gray-700/50 shadow-lg p-4"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center space-x-2">
+                      <BarChart3 className="w-5 h-5 text-brand-primary" />
+                      <span className="text-lg font-semibold text-gray-900 dark:text-white">{symbol}</span>
+                    </div>
+                    <span className="text-xs text-gray-500 dark:text-gray-400">
+                      {ts ? new Date(ts).toLocaleTimeString() : '—'}
+                    </span>
+                  </div>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {typeof price === 'number' ? `$${price.toFixed(2)}` : 'N/A'}
+                  </p>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">Latest trade price</p>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

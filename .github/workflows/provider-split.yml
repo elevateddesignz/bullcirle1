@@ -1,0 +1,29 @@
+name: Provider Split Guard
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  provider-split:
+    name: Enforce provider import boundaries
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Run provider split lint
+        run: npm run lint:provider

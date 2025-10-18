@@ -1,88 +1,254 @@
-import { Router } from 'express';
+import { Router, type Request } from 'express';
 import axios from 'axios';
 import { requireRole, requireVerifiedEmail } from '../middleware/require-role.js';
-import { alpacaBase, clientFor, refreshTokenIfNeeded, storeNewTokens, type AlpacaEnv } from '../lib/alpaca.js';
+import { createPerUserRateLimiter } from '../middleware/rate-limit.js';
+import { alpacaBase, type AlpacaEnv } from '../lib/alpaca.js';
 import { logger } from '../lib/logger.js';
 import { prisma } from '../lib/prisma.js';
-import jwt from 'jsonwebtoken';
+import { recordTradeAudit } from '../utils/trade-audit.js';
+import {
+  getAccount,
+  getPositions,
+  listOrders,
+  placeOrder,
+  cancelOrder,
+  getOrder,
+  type ListOrdersParams,
+  type PlaceOrderParams,
+} from '../services/trading.js';
 
 const router = Router();
 
-const AUTHORIZE_URL = 'https://app.alpaca.markets/oauth/authorize';
-const TOKEN_URL = 'https://api.alpaca.markets/oauth/token';
-const JWT_SECRET = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+const orderRateLimiter = createPerUserRateLimiter();
 
-function ensureEnv(env?: string): AlpacaEnv {
-  if (env === 'live') return 'live';
-  return 'paper';
+interface RequestWithContext extends Request {
+  auth?: {
+    userId?: string;
+    env?: string;
+  };
+  envMode?: string;
 }
 
-function createStateToken(payload: { userId: string; env: AlpacaEnv; returnTo?: string }) {
-  if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET is required to sign OAuth state');
+const ORDER_SIDES = new Set(['buy', 'sell']);
+const ORDER_TYPES = new Set(['market', 'limit', 'stop', 'stop_limit', 'trailing_stop']);
+const ORDER_TIME_IN_FORCE = new Set([
+  'day',
+  'gtc',
+  'opg',
+  'ioc',
+  'fok',
+  'gtc+etb',
+  'gtc+dtb',
+]);
+
+function coerceEnv(value: unknown): AlpacaEnv | undefined {
+  if (typeof value !== 'string') {
+    return undefined;
   }
-  return jwt.sign(payload, JWT_SECRET, { expiresIn: '10m' });
+  const normalized = value.trim().toLowerCase();
+  if (normalized === 'live' || normalized === 'paper') {
+    return normalized;
+  }
+  return undefined;
 }
 
-function verifyStateToken(token: string) {
-  if (!JWT_SECRET) {
-    throw new Error('JWT_SECRET not configured');
-  }
-  return jwt.verify(token, JWT_SECRET) as { userId: string; env: AlpacaEnv; returnTo?: string };
+function resolveRequestedEnv(req: RequestWithContext): AlpacaEnv {
+  return (
+    coerceEnv(req.headers['x-env-mode']) ??
+    coerceEnv((req.params as Record<string, unknown>)?.env) ??
+    coerceEnv((req.query.env as string) ?? (req.query.mode as string)) ??
+    coerceEnv(req.envMode) ??
+    coerceEnv(req.auth?.env) ??
+    'paper'
+  );
 }
 
+function applyRequestEnv(req: RequestWithContext, env: AlpacaEnv) {
+  req.envMode = env;
+}
 
-router.post('/oauth/start', requireRole(['free', 'paid', 'admin']), requireVerifiedEmail(), async (req, res) => {
-  const auth = req.auth;
-  if (!auth) {
-    return res.status(401).json({ error: 'authentication required' });
+function resolveStatus(error: unknown, fallback = 500) {
+  const status = (error as any)?.status;
+  if (typeof status === 'number' && status >= 100 && status < 600) {
+    return status;
   }
-  try {
-    const env = ensureEnv(req.body?.env || auth.env);
-    const cfg = env === 'live'
-      ? {
-          clientId: process.env.ALPACA_CLIENT_ID_LIVE,
-          redirectUri: process.env.ALPACA_REDIRECT_URI_LIVE,
-          scope: 'account trading data',
-        }
-      : {
-          clientId: process.env.ALPACA_CLIENT_ID_PAPER,
-          redirectUri: process.env.ALPACA_REDIRECT_URI_PAPER,
-          scope: 'account trading data',
-        };
+  if (axios.isAxiosError(error) && error.response?.status) {
+    return error.response.status;
+  }
+  return fallback;
+}
 
-    if (!cfg.clientId || !cfg.redirectUri) {
-      return res.status(500).json({ error: 'Alpaca OAuth not configured' });
+function sendError(res: any, error: unknown, fallback: string, fallbackStatus = 500) {
+  const status = resolveStatus(error, fallbackStatus);
+  if (axios.isAxiosError(error) && error.response?.data) {
+    return res.status(status).json(error.response.data);
+  }
+  if (status >= 400 && status < 500 && error instanceof Error && error.message) {
+    return res.status(status).json({ error: error.message });
+  }
+  return res.status(status).json({ error: fallback });
+}
+
+function buildListOrdersParams(req: Request): ListOrdersParams | undefined {
+  const params: ListOrdersParams = {};
+  const query = req.query as Record<string, unknown>;
+
+  if (typeof query.status === 'string') {
+    const normalized = query.status.toLowerCase();
+    if (normalized === 'open' || normalized === 'closed' || normalized === 'all') {
+      params.status = normalized;
     }
-
-    const state = createStateToken({
-      userId: auth.userId,
-      env,
-      returnTo: typeof req.body?.returnTo === 'string' ? req.body.returnTo : undefined,
-    });
-
-    const authorizeUrl = new URL(AUTHORIZE_URL);
-    authorizeUrl.searchParams.set('response_type', 'code');
-    authorizeUrl.searchParams.set('client_id', cfg.clientId);
-    authorizeUrl.searchParams.set('redirect_uri', cfg.redirectUri);
-    authorizeUrl.searchParams.set('scope', cfg.scope);
-    authorizeUrl.searchParams.set('state', state);
-
-    res.json({ url: authorizeUrl.toString(), state });
-  } catch (error) {
-    logger.error({ err: error }, 'Failed to generate Alpaca OAuth URL');
-    res.status(500).json({ error: 'Failed to start OAuth flow' });
   }
-});
+  if (typeof query.limit === 'string' || typeof query.limit === 'number') {
+    const value = Number(query.limit);
+    if (Number.isFinite(value)) {
+      params.limit = Math.max(1, Math.floor(value));
+    }
+  }
+  if (typeof query.after === 'string') {
+    params.after = query.after;
+  }
+  if (typeof query.until === 'string') {
+    params.until = query.until;
+  }
+  if (typeof query.direction === 'string') {
+    const normalized = query.direction.toLowerCase();
+    if (normalized === 'asc' || normalized === 'desc') {
+      params.direction = normalized;
+    }
+  }
+  if (typeof query.nested === 'string') {
+    params.nested = query.nested.toLowerCase() === 'true';
+  }
+  if (typeof query.symbols === 'string') {
+    params.symbols = query.symbols
+      .split(',')
+      .map(symbol => symbol.trim().toUpperCase())
+      .filter(Boolean);
+  }
+  if (Array.isArray(query.symbols)) {
+    params.symbols = (query.symbols as string[])
+      .map(symbol => symbol.trim().toUpperCase())
+      .filter(Boolean);
+  }
+  if (typeof query.side === 'string') {
+    const normalized = query.side.toLowerCase();
+    if (normalized === 'buy' || normalized === 'sell') {
+      params.side = normalized;
+    }
+  }
+
+  return Object.keys(params).length ? params : undefined;
+}
+
+function parsePlaceOrderPayload(payload: unknown): PlaceOrderParams {
+  if (!payload || typeof payload !== 'object') {
+    const error = new Error('order payload required');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const data = payload as Record<string, unknown>;
+
+  const symbol = typeof data.symbol === 'string' ? data.symbol.trim().toUpperCase() : undefined;
+  if (!symbol) {
+    const error = new Error('symbol is required');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const side = typeof data.side === 'string' ? data.side.trim().toLowerCase() : undefined;
+  if (!side || !ORDER_SIDES.has(side)) {
+    const error = new Error('side must be "buy" or "sell"');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const qtyRaw = data.qty;
+  if (typeof qtyRaw !== 'number' && typeof qtyRaw !== 'string') {
+    const error = new Error('qty must be a number or numeric string');
+    (error as any).status = 400;
+    throw error;
+  }
+  const qty = typeof qtyRaw === 'number' ? qtyRaw : qtyRaw.trim();
+  if (typeof qty === 'string' && !qty) {
+    const error = new Error('qty must be a number or numeric string');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const typeRaw = typeof data.type === 'string' ? data.type.trim().toLowerCase() : undefined;
+  if (!typeRaw || !ORDER_TYPES.has(typeRaw)) {
+    const error = new Error('type is invalid');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const tifRaw = typeof data.timeInForce === 'string' ? data.timeInForce.trim().toLowerCase() : undefined;
+  if (!tifRaw || !ORDER_TIME_IN_FORCE.has(tifRaw)) {
+    const error = new Error('timeInForce is invalid');
+    (error as any).status = 400;
+    throw error;
+  }
+
+  const order: PlaceOrderParams = {
+    symbol,
+    side,
+    qty,
+    type: typeRaw,
+    timeInForce: tifRaw as PlaceOrderParams['timeInForce'],
+  };
+
+  if (typeof data.limitPrice === 'number') {
+    order.limitPrice = data.limitPrice;
+  } else if (typeof data.limitPrice === 'string' && data.limitPrice.trim()) {
+    const value = Number(data.limitPrice);
+    if (!Number.isFinite(value)) {
+      const error = new Error('limitPrice must be numeric');
+      (error as any).status = 400;
+      throw error;
+    }
+    order.limitPrice = value;
+  }
+
+  if (typeof data.stopPrice === 'number') {
+    order.stopPrice = data.stopPrice;
+  } else if (typeof data.stopPrice === 'string' && data.stopPrice.trim()) {
+    const value = Number(data.stopPrice);
+    if (!Number.isFinite(value)) {
+      const error = new Error('stopPrice must be numeric');
+      (error as any).status = 400;
+      throw error;
+    }
+    order.stopPrice = value;
+  }
+
+  if (typeof data.clientOrderId === 'string' && data.clientOrderId.trim()) {
+    order.clientOrderId = data.clientOrderId.trim();
+  }
+
+  return order;
+}
+
+function ensureAuthenticated(req: RequestWithContext) {
+  if (!req.auth?.userId) {
+    const error = new Error('authentication required');
+    (error as any).status = 401;
+    throw error;
+  }
+}
 
 router.get('/connection', requireRole(['free', 'paid', 'admin']), async (req, res) => {
-  const auth = req.auth;
-  if (!auth) {
-    return res.status(401).json({ error: 'authentication required' });
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
   }
-  const env = ensureEnv((req.query.env as string) || auth.env);
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
   const connection = await prisma.brokerConnection.findFirst({
-    where: { userId: auth.userId, provider: 'alpaca', env },
+    where: { userId: auth.userId!, broker: 'alpaca', mode: env },
   });
   if (!connection) {
     return res.json({ connected: false, env });
@@ -90,156 +256,186 @@ router.get('/connection', requireRole(['free', 'paid', 'admin']), async (req, re
   res.json({
     connected: true,
     env,
-    scopes: connection.scopes,
+    scopes: connection.scope ? connection.scope.split(' ') : [],
     accountId: connection.accountId,
     expiresAt: connection.expiresAt,
   });
 });
 
 router.delete('/connection/:env', requireRole(['free', 'paid', 'admin']), async (req, res) => {
-  const auth = req.auth;
-  if (!auth) {
-    return res.status(401).json({ error: 'authentication required' });
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
   }
-  const env = ensureEnv(req.params.env);
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
   await prisma.brokerConnection.deleteMany({
-    where: { userId: auth.userId, provider: 'alpaca', env },
+    where: { userId: auth.userId!, broker: 'alpaca', mode: env },
   });
   res.status(204).send();
 });
 
 router.get('/account', requireRole(['free', 'paid', 'admin']), async (req, res) => {
-  const auth = req.auth;
-  if (!auth) {
-    return res.status(401).json({ error: 'authentication required' });
-  }
-  const env = ensureEnv((req.query.env as string) || auth.env);
   try {
-    const data = await refreshTokenIfNeeded(auth.userId, env, async client => {
-      const [account, positions, orders] = await Promise.all([
-        client.get('/v2/account'),
-        client.get('/v2/positions'),
-        client.get('/v2/orders', { params: { status: 'all', limit: 50 } }),
-      ]);
-      return {
-        account: account.data,
-        positions: positions.data,
-        orders: orders.data,
-      };
-    });
-    res.json({ env, ...data });
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
+  }
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+
+  try {
+    const account = await getAccount(req);
+    res.json({ env, account });
   } catch (error) {
     logger.error({ err: error, userId: auth.userId, env }, 'Failed to fetch Alpaca account');
-    res.status(502).json({ error: 'Failed to fetch Alpaca account' });
+    sendError(res, error, 'Failed to fetch Alpaca account', 502);
   }
 });
 
-router.post('/orders', requireRole(['paid', 'admin']), async (req, res) => {
-  const auth = req.auth;
-  if (!auth) {
-    return res.status(401).json({ error: 'authentication required' });
-  }
-  const env = ensureEnv((req.body?.env as string) || auth.env);
-  const orderPayload = req.body?.order;
-  if (!orderPayload) {
-    return res.status(400).json({ error: 'order payload required' });
-  }
+router.get('/positions', requireRole(['free', 'paid', 'admin']), async (req, res) => {
   try {
-    const result = await refreshTokenIfNeeded(auth.userId, env, client =>
-      client.post('/v2/orders', orderPayload)
-    );
-    res.status(201).json(result.data);
+    ensureAuthenticated(req as RequestWithContext);
   } catch (error) {
-    if (axios.isAxiosError(error)) {
-      return res.status(error.response?.status || 500).json({ error: error.response?.data || 'order failed' });
-    }
-    res.status(500).json({ error: 'order failed' });
-  }
-});
-
-router.post('/webhook/callback', async (req, res) => {
-  // Placeholder for future Alpaca event webhooks (orders, account updates)
-  logger.info({ event: req.body?.event }, 'Received Alpaca webhook');
-  res.status(202).json({ ok: true });
-});
-
-router.get('/callback', async (req, res) => {
-  const { state, code } = req.query;
-  if (!state || typeof state !== 'string' || !code || typeof code !== 'string') {
-    return res.status(400).send('Invalid OAuth callback parameters');
+    return sendError(res, error, 'authentication required', 401);
   }
 
-  let payload: { userId: string; env: AlpacaEnv; returnTo?: string };
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+
   try {
-    payload = verifyStateToken(state);
+    const positions = await getPositions(req);
+    res.json({ env, positions });
   } catch (error) {
-    logger.warn({ err: error }, 'Invalid Alpaca OAuth state');
-    return res.status(400).send('Invalid state');
+    logger.error({ err: error, userId: auth.userId, env }, 'Failed to fetch Alpaca positions');
+    sendError(res, error, 'Failed to fetch Alpaca positions', 502);
+  }
+});
+
+router.get('/orders', requireRole(['free', 'paid', 'admin']), async (req, res) => {
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
   }
 
-  const cfg = payload.env === 'live'
-    ? {
-        clientId: process.env.ALPACA_CLIENT_ID_LIVE,
-        clientSecret: process.env.ALPACA_CLIENT_SECRET_LIVE,
-        redirectUri: process.env.ALPACA_REDIRECT_URI_LIVE,
-      }
-    : {
-        clientId: process.env.ALPACA_CLIENT_ID_PAPER,
-        clientSecret: process.env.ALPACA_CLIENT_SECRET_PAPER,
-        redirectUri: process.env.ALPACA_REDIRECT_URI_PAPER,
-      };
-
-  if (!cfg.clientId || !cfg.clientSecret || !cfg.redirectUri) {
-    return res.status(500).send('OAuth not configured');
-  }
-
-  const payloadBody = new URLSearchParams({
-    grant_type: 'authorization_code',
-    code,
-    client_id: cfg.clientId,
-    client_secret: cfg.clientSecret,
-    redirect_uri: cfg.redirectUri,
-  });
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+  const params = buildListOrdersParams(req);
 
   try {
-    const response = await axios.post(TOKEN_URL, payloadBody, {
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    const orders = await listOrders(req, params);
+    res.json({ env, orders });
+  } catch (error) {
+    logger.error({ err: error, userId: auth.userId, env, params }, 'Failed to list Alpaca orders');
+    sendError(res, error, 'Failed to list Alpaca orders', 502);
+  }
+});
+
+router.post('/orders', requireRole(['paid', 'admin']), requireVerifiedEmail(), orderRateLimiter, async (req, res) => {
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
+  }
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+
+  let orderParams: PlaceOrderParams;
+  try {
+    orderParams = parsePlaceOrderPayload(req.body?.order);
+  } catch (error) {
+    return sendError(res, error, 'order payload required', 400);
+  }
+
+  try {
+    const response = await placeOrder(req, orderParams);
+    await recordTradeAudit({
+      userId: auth.userId!,
+      env,
+      action: 'alpaca.order.create',
+      status: 'success',
+      requestPayload: orderParams,
+      responsePayload: response,
     });
-    const { access_token, refresh_token, scope, expires_in } = response.data as {
-      access_token: string;
-      refresh_token: string;
-      scope: string;
-      expires_in: number;
-    };
-
-    // Fetch account to capture accountId and verify access
-    let accountId: string | undefined;
-    try {
-      const client = axios.create({
-        baseURL: alpacaBase(payload.env),
-        headers: { Authorization: `Bearer ${access_token}` },
-      });
-      const accountResponse = await client.get('/v2/account');
-      accountId = accountResponse.data?.id;
-    } catch (error) {
-      logger.warn({ err: error, userId: payload.userId }, 'Failed to fetch account during OAuth callback');
-    }
-
-    await storeNewTokens({
-      userId: payload.userId,
-      env: payload.env,
-      accessToken: access_token,
-      refreshToken: refresh_token,
-      scopes: scope?.split(' ') ?? [],
-      expiresIn: expires_in,
-      accountId,
-    });
-
-    const target = payload.returnTo || 'https://bullcircle.com/dashboard';
-    res.send(`<!doctype html><html><body><script>window.opener && window.opener.postMessage({ ok: true, env: '${payload.env}' }, '*'); window.close();</script><p>Connection successful. You can close this window.</p><a href="${target}">Return to BullCircle</a></body></html>`);
+    res.status(201).json(response);
   } catch (error) {
-    logger.error({ err: error }, 'Failed to exchange Alpaca authorization code');
-    res.status(500).send('Failed to exchange authorization code');
+    await recordTradeAudit({
+      userId: auth.userId!,
+      env,
+      action: 'alpaca.order.create',
+      status: 'error',
+      requestPayload: orderParams,
+      error,
+    });
+    logger.error({ err: error, userId: auth.userId, env }, 'Failed to place Alpaca order');
+    sendError(res, error, 'order failed');
+  }
+});
+
+router.get('/orders/:id', requireRole(['free', 'paid', 'admin']), async (req, res) => {
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
+  }
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+
+  const id = req.params.id;
+  try {
+    const order = await getOrder(req, id);
+    res.json({ env, order });
+  } catch (error) {
+    logger.error({ err: error, userId: auth.userId, env, id }, 'Failed to fetch Alpaca order');
+    sendError(res, error, 'Failed to fetch Alpaca order', 502);
+  }
+});
+
+router.delete('/orders/:id', requireRole(['paid', 'admin']), orderRateLimiter, async (req, res) => {
+  try {
+    ensureAuthenticated(req as RequestWithContext);
+  } catch (error) {
+    return sendError(res, error, 'authentication required', 401);
+  }
+
+  const auth = (req as RequestWithContext).auth!;
+  const env = resolveRequestedEnv(req as RequestWithContext);
+  applyRequestEnv(req as RequestWithContext, env);
+
+  const id = req.params.id;
+  try {
+    const result = await cancelOrder(req, id);
+    await recordTradeAudit({
+      userId: auth.userId!,
+      env,
+      action: 'alpaca.order.cancel',
+      status: 'success',
+      requestPayload: { id },
+      responsePayload: result,
+    });
+    res.json(result ?? { cancelled: true });
+  } catch (error) {
+    await recordTradeAudit({
+      userId: auth.userId!,
+      env,
+      action: 'alpaca.order.cancel',
+      status: 'error',
+      requestPayload: { id },
+      error,
+    });
+    logger.error({ err: error, userId: auth.userId, env, id }, 'Failed to cancel Alpaca order');
+    sendError(res, error, 'Failed to cancel Alpaca order');
   }
 });
 

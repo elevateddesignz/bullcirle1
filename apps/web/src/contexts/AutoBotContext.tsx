@@ -38,8 +38,8 @@ export const useAutoBot = () => {
 };
 
 export function AutoBotProvider({ children }: { children: React.ReactNode }) {
-  const { envMode } = useEnvMode();           // "paper" or "live"
-  const modeParam   = envMode.toLowerCase();  // lowercase for API
+  const { envMode } = useEnvMode();           // trading env: "paper" or "live"
+  const modeParam   = envMode.toLowerCase();  // lowercase for trading API calls
 
   const [running, setRunning]         = useState(false);
   const [interval, setIntervalMin]    = useState(30);

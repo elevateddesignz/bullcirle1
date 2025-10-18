@@ -4,6 +4,8 @@ import { useAuth } from '../contexts/AuthContext';
 // Removed unused imports from 'lucide-react'
 import { useTheme } from '../contexts/ThemeContext';
 import toast from 'react-hot-toast';
+import { tradeFetch } from '../lib/api';
+import ConnectAlpaca from '../components/ConnectAlpaca';
 
 export default function Settings() {
   const { theme, toggleTheme } = useTheme();
@@ -33,6 +35,10 @@ export default function Settings() {
   const [, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
+  const [paperStatus, setPaperStatus] = useState<'loading' | 'connected' | 'missing' | 'error'>('loading');
+  const [liveStatus, setLiveStatus] = useState<'loading' | 'connected' | 'missing' | 'error'>('loading');
+  const [paperError, setPaperError] = useState<string | null>(null);
+  const [liveError, setLiveError] = useState<string | null>(null);
 
   useEffect(() => {
     const checkBiometric = async () => {
@@ -91,6 +97,36 @@ export default function Settings() {
       darkMode: theme === 'dark'
     }));
   }, [theme]);
+
+  useEffect(() => {
+    const loadConnection = async (mode: 'paper' | 'live') => {
+      const setStatus = mode === 'paper' ? setPaperStatus : setLiveStatus;
+      const setStatusError = mode === 'paper' ? setPaperError : setLiveError;
+      try {
+        setStatus('loading');
+        setStatusError(null);
+        const response = await tradeFetch('/v2/alpaca/account', { envMode: mode });
+        if (response.status === 412) {
+          setStatus('missing');
+          return;
+        }
+        if (!response.ok) {
+          setStatus('error');
+          setStatusError(`HTTP ${response.status}`);
+          return;
+        }
+        await response.json();
+        setStatus('connected');
+      } catch (err) {
+        console.error('Failed to check Alpaca connection', err);
+        setStatus('error');
+        setStatusError(err instanceof Error ? err.message : 'Unknown error');
+      }
+    };
+
+    void loadConnection('paper');
+    void loadConnection('live');
+  }, []);
 
   const handleEnableBiometric = async () => {
     if (!user) return;
@@ -177,7 +213,62 @@ export default function Settings() {
   return (
     <div className="max-w-7xl mx-auto space-y-8">
       <h1 className="text-3xl font-bold">Settings</h1>
-      
+
+      {/* Broker Connections */}
+      <div className="rounded-xl border border-gray-200 bg-white p-6 shadow-sm dark:border-gray-700 dark:bg-gray-800">
+        <h2 className="text-xl font-semibold text-gray-900 dark:text-white">Broker Connections</h2>
+        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
+          Trading mode applies to Alpaca orders only. Market data always stays on Alpha, so connect each Alpaca mode to trade.
+        </p>
+        <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          {(['paper', 'live'] as const).map(mode => {
+            const status = mode === 'paper' ? paperStatus : liveStatus;
+            const statusError = mode === 'paper' ? paperError : liveError;
+            return (
+              <div
+                key={mode}
+                className="flex flex-col gap-3 rounded-lg border border-gray-200 p-4 dark:border-gray-700"
+              >
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Alpaca {mode === 'live' ? 'Live' : 'Paper'}
+                    </h3>
+                    <p className="text-xs text-gray-500 dark:text-gray-400">
+                      Orders use {mode === 'live' ? 'real capital' : 'paper funds'}.
+                    </p>
+                  </div>
+                  <span
+                    className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                      status === 'connected'
+                        ? 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-300'
+                        : status === 'loading'
+                        ? 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-300'
+                        : status === 'missing'
+                        ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-900/30 dark:text-yellow-300'
+                        : 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-300'
+                    }`}
+                  >
+                    {status === 'connected' && 'Connected'}
+                    {status === 'loading' && 'Checking…'}
+                    {status === 'missing' && 'Not connected'}
+                    {status === 'error' && 'Error'}
+                  </span>
+                </div>
+                {(status === 'missing' || status === 'error') && (
+                  <div className="flex flex-col gap-2">
+                    {statusError && (
+                      <p className="text-xs text-red-600 dark:text-red-300">{statusError}</p>
+                    )}
+                    <ConnectAlpaca mode={mode} />
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
       {/* Biometric Authentication Section */}
       <div className="bg-white dark:bg-gray-800 rounded-xl p-6 border border-gray-200 dark:border-gray-700">
         <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">

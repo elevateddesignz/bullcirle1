@@ -1,15 +1,12 @@
-import { createClient } from '@supabase/supabase-js';
+import type { EnvMode } from '../contexts/EnvModeContext';
+import { getEnvModeSnapshot } from '../contexts/EnvModeContext';
 import type { User, SubscriptionTier } from '../types';
+import { supabase as supabaseClient } from './supabaseClient';
 
 // ---------- Supabase Setup (User, Profile, Subscriptions) ----------
-const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
-const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+const supabase = supabaseClient;
 
-if (!supabaseUrl || !supabaseAnonKey) {
-  throw new Error('Missing Supabase environment variables');
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+export { supabase };
 
 /**
  * Fetch the authenticated user's profile and subscriptions
@@ -99,28 +96,127 @@ if (!backendBaseUrl) {
   throw new Error('Missing backend URL environment variable (VITE_BACKEND_URL or VITE_API_URL)');
 }
 
+type HeadersRecord = Record<string, string>;
+
+function normalizeApiPath(path: string): string {
+  if (!path.startsWith('/')) {
+    return normalizeApiPath(`/${path}`);
+  }
+  if (path.startsWith('/api')) {
+    return path;
+  }
+  return `/api${path}`;
+}
+
 const jsonHeaders = { 'Content-Type': 'application/json' } as const;
 
-async function getAuthHeaders(extra?: Record<string, string>) {
+function normalizeHeaders(headers?: HeadersInit): HeadersRecord {
+  if (!headers) {
+    return {};
+  }
+  if (headers instanceof Headers) {
+    const result: HeadersRecord = {};
+    headers.forEach((value, key) => {
+      result[key] = value;
+    });
+    return result;
+  }
+  if (Array.isArray(headers)) {
+    return headers.reduce<HeadersRecord>((acc, [key, value]) => {
+      acc[key] = value;
+      return acc;
+    }, {});
+  }
+  return { ...headers };
+}
+
+function findHeader(headers: HeadersRecord, name: string): string | undefined {
+  const target = name.toLowerCase();
+  for (const [key, value] of Object.entries(headers)) {
+    if (key.toLowerCase() === target) {
+      return value;
+    }
+  }
+  return undefined;
+}
+
+function setHeader(headers: HeadersRecord, name: string, value: string) {
+  const existingKey = Object.keys(headers).find(key => key.toLowerCase() === name.toLowerCase());
+  if (existingKey) {
+    headers[existingKey] = value;
+  } else {
+    headers[name] = value;
+  }
+}
+
+async function getAuthHeaders(extra?: HeadersInit): Promise<HeadersRecord> {
   const {
     data: { session },
   } = await supabase.auth.getSession();
   if (!session?.access_token) {
     throw new Error('Authentication required');
   }
-  return {
-    Authorization: `Bearer ${session.access_token}`,
-    ...extra,
-  } satisfies Record<string, string>;
+  const headers = normalizeHeaders(extra);
+  setHeader(headers, 'Authorization', `Bearer ${session.access_token}`);
+  return headers;
 }
 
-async function authorizedFetch(path: string, init: RequestInit = {}) {
-  const headers = await getAuthHeaders(init.headers as Record<string, string> | undefined);
-  return fetch(`${backendBaseUrl}${path}`, {
+export async function marketFetch(path: string, init: RequestInit = {}) {
+  const headers = await getAuthHeaders(init.headers);
+  return fetch(`${backendBaseUrl}${normalizeApiPath(path)}`, {
     ...init,
     headers,
   });
 }
+
+type TradeFetchInit = RequestInit & { envMode?: EnvMode };
+
+export async function tradeFetch(path: string, init: TradeFetchInit = {}) {
+  const { envMode, ...rest } = init;
+  const headers = normalizeHeaders(rest.headers);
+  const headerEnvMode = findHeader(headers, 'x-env-mode');
+  const resolvedEnvMode = envMode
+    ?? (headerEnvMode === 'live'
+      ? 'live'
+      : headerEnvMode === 'paper'
+        ? 'paper'
+        : getEnvModeSnapshot());
+  setHeader(headers, 'x-env-mode', resolvedEnvMode);
+
+  const authHeaders = await getAuthHeaders(headers);
+  const hasContentType = Boolean(findHeader(authHeaders, 'content-type'));
+  const method = (rest.method ?? 'GET').toUpperCase();
+  if (rest.body && method !== 'GET' && !hasContentType) {
+    setHeader(authHeaders, 'Content-Type', 'application/json');
+  }
+
+  return fetch(`${backendBaseUrl}${normalizeApiPath(path)}`, {
+    ...rest,
+    headers: authHeaders,
+  });
+}
+
+export interface MarketQuote {
+  symbol: string;
+  bidPrice: number | null;
+  askPrice: number | null;
+  bidSize: number | null;
+  askSize: number | null;
+  ts: string | null;
+}
+
+export const getMarketQuote = async (symbol: string): Promise<MarketQuote> => {
+  if (!symbol?.trim()) {
+    throw new Error('Symbol is required');
+  }
+  const query = new URLSearchParams({ symbol: symbol.trim().toUpperCase() });
+  const response = await marketFetch(`/api/market/quote?${query.toString()}`);
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Failed to fetch market quote');
+  }
+  return response.json() as Promise<MarketQuote>;
+};
 
 // --- Chart Data ---
 interface ChartDataParams {
@@ -174,9 +270,10 @@ export const executeTrade = async (
   params: ExecuteTradeParams,
   mode: 'paper' | 'live' = 'paper'
 ) => {
-  const response = await authorizedFetch(`/api/v2/alpaca/orders`, {
+  const response = await tradeFetch(`/api/v2/alpaca/orders`, {
     method: 'POST',
     headers: jsonHeaders,
+    envMode: mode,
     body: JSON.stringify({
       env: mode,
       order: {
@@ -202,7 +299,9 @@ export const executeTrade = async (
 };
 
 export const fetchAlpacaAccount = async (mode: 'paper' | 'live') => {
-  const response = await authorizedFetch(`/api/v2/alpaca/account?env=${mode}`);
+  const response = await tradeFetch(`/api/v2/alpaca/account?env=${mode}`, {
+    envMode: mode,
+  });
   if (!response.ok) {
     throw new Error('Failed to load Alpaca account');
   }
@@ -210,7 +309,9 @@ export const fetchAlpacaAccount = async (mode: 'paper' | 'live') => {
 };
 
 export const fetchAlpacaHistory = async (mode: 'paper' | 'live') => {
-  const response = await authorizedFetch(`/api/v2/alpaca/account/history?env=${mode}`);
+  const response = await tradeFetch(`/api/v2/alpaca/account/history?env=${mode}`, {
+    envMode: mode,
+  });
   if (!response.ok) {
     throw new Error('Failed to load Alpaca history');
   }
@@ -218,7 +319,9 @@ export const fetchAlpacaHistory = async (mode: 'paper' | 'live') => {
 };
 
 export const getAlpacaConnection = async (mode: 'paper' | 'live') => {
-  const response = await authorizedFetch(`/api/v2/alpaca/connection?env=${mode}`);
+  const response = await tradeFetch(`/api/v2/alpaca/connection?env=${mode}`, {
+    envMode: mode,
+  });
   if (!response.ok) {
     throw new Error('Failed to lookup Alpaca connection');
   }
@@ -226,8 +329,9 @@ export const getAlpacaConnection = async (mode: 'paper' | 'live') => {
 };
 
 export const disconnectAlpaca = async (mode: 'paper' | 'live') => {
-  const response = await authorizedFetch(`/api/v2/alpaca/connection/${mode}`, {
+  const response = await tradeFetch(`/api/v2/alpaca/connection/${mode}`, {
     method: 'DELETE',
+    envMode: mode,
   });
   if (!response.ok) {
     throw new Error('Failed to disconnect Alpaca');
@@ -235,8 +339,9 @@ export const disconnectAlpaca = async (mode: 'paper' | 'live') => {
 };
 
 export const startAlpacaOAuth = async (mode: 'paper' | 'live', returnTo?: string) => {
-  const response = await authorizedFetch(`/api/v2/alpaca/oauth/start`, {
+  const response = await tradeFetch(`/api/v2/alpaca/oauth/start`, {
     method: 'POST',
+    envMode: mode,
     headers: jsonHeaders,
     body: JSON.stringify({ env: mode, returnTo }),
   });
@@ -260,4 +365,7 @@ export const api = {
   getAlpacaConnection,
   disconnectAlpaca,
   startAlpacaOAuth,
+  getMarketQuote,
+  marketFetch,
+  tradeFetch,
 };

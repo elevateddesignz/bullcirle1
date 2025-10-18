@@ -1,3 +1,4 @@
+import type { Request } from 'express';
 import axios, { AxiosError, AxiosInstance } from 'axios';
 import { prisma } from './prisma.js';
 import { decrypt, encrypt } from './crypto.js';
@@ -9,14 +10,14 @@ const OAUTH_BASE_URL = 'https://api.alpaca.markets';
 
 const envConfig = {
   paper: {
-    clientId: process.env.ALPACA_CLIENT_ID_PAPER,
-    clientSecret: process.env.ALPACA_CLIENT_SECRET_PAPER,
-    redirectUri: process.env.ALPACA_REDIRECT_URI_PAPER,
+    clientId: process.env.ALPACA_PAPER_CLIENT_ID,
+    clientSecret: process.env.ALPACA_PAPER_CLIENT_SECRET,
+    redirectUri: process.env.ALPACA_PAPER_REDIRECT_URI,
   },
   live: {
-    clientId: process.env.ALPACA_CLIENT_ID_LIVE,
-    clientSecret: process.env.ALPACA_CLIENT_SECRET_LIVE,
-    redirectUri: process.env.ALPACA_REDIRECT_URI_LIVE,
+    clientId: process.env.ALPACA_LIVE_CLIENT_ID,
+    clientSecret: process.env.ALPACA_LIVE_CLIENT_SECRET,
+    redirectUri: process.env.ALPACA_LIVE_REDIRECT_URI,
   },
 } satisfies Record<AlpacaEnv, { clientId?: string; clientSecret?: string; redirectUri?: string }>;
 
@@ -34,7 +35,7 @@ function assertConfig(env: AlpacaEnv) {
 
 async function getBrokerConnection(userId: string, env: AlpacaEnv) {
   const connection = await prisma.brokerConnection.findFirst({
-    where: { userId, provider: 'alpaca', env },
+    where: { userId, broker: 'alpaca', mode: env },
   });
   if (!connection) {
     throw new Error(`No Alpaca connection for user ${userId} (${env})`);
@@ -44,7 +45,7 @@ async function getBrokerConnection(userId: string, env: AlpacaEnv) {
 
 export async function clientFor(userId: string, env: AlpacaEnv): Promise<AxiosInstance> {
   const connection = await getBrokerConnection(userId, env);
-  const accessToken = await decrypt(connection.accessTokenEnc);
+  const accessToken = decrypt(connection.accessToken);
   const instance = axios.create({
     baseURL: alpacaBase(env),
     headers: {
@@ -60,7 +61,10 @@ export async function clientFor(userId: string, env: AlpacaEnv): Promise<AxiosIn
 async function refreshAccessToken(userId: string, env: AlpacaEnv) {
   const connection = await getBrokerConnection(userId, env);
   const cfg = assertConfig(env);
-  const refreshToken = await decrypt(connection.refreshTokenEnc);
+  if (!connection.refreshToken) {
+    throw new Error(`Missing Alpaca refresh token for user ${userId} (${env})`);
+  }
+  const refreshToken = decrypt(connection.refreshToken);
 
   const payload = new URLSearchParams({
     grant_type: 'refresh_token',
@@ -84,9 +88,9 @@ async function refreshAccessToken(userId: string, env: AlpacaEnv) {
     await prisma.brokerConnection.update({
       where: { id: connection.id },
       data: {
-        accessTokenEnc: await encrypt(access_token),
-        refreshTokenEnc: await encrypt(refresh_token),
-        scopes: scope?.split(' ') ?? connection.scopes,
+        accessToken: encrypt(access_token),
+        refreshToken: encrypt(refresh_token),
+        scope: scope ?? connection.scope,
         expiresAt: new Date(Date.now() + expires_in * 1000),
       },
     });
@@ -116,6 +120,16 @@ export async function refreshTokenIfNeeded<T>(
   }
 }
 
+export async function getAlpacaClient(req: Request, env: AlpacaEnv): Promise<AxiosInstance> {
+  const auth = req.auth;
+  if (!auth?.userId) {
+    const error = new Error('Authentication required for Alpaca client access');
+    (error as any).status = 401;
+    throw error;
+  }
+  return clientFor(auth.userId, env);
+}
+
 export async function storeNewTokens(params: {
   userId: string;
   env: AlpacaEnv;
@@ -126,31 +140,39 @@ export async function storeNewTokens(params: {
   accountId?: string;
 }) {
   const expiresAt = new Date(Date.now() + params.expiresIn * 1000);
-  const encryptedAccess = await encrypt(params.accessToken);
-  const encryptedRefresh = await encrypt(params.refreshToken);
+  const encryptedAccess = encrypt(params.accessToken);
+  const encryptedRefresh = encrypt(params.refreshToken);
 
-  await prisma.brokerConnection.upsert({
+  const existing = await prisma.brokerConnection.findFirst({
     where: {
-      userId_provider_env: {
-        userId: params.userId,
-        provider: 'alpaca',
-        env: params.env,
-      },
-    },
-    update: {
-      accessTokenEnc: encryptedAccess,
-      refreshTokenEnc: encryptedRefresh,
-      scopes: params.scopes,
-      expiresAt,
-      accountId: params.accountId,
-    },
-    create: {
       userId: params.userId,
-      provider: 'alpaca',
-      env: params.env,
-      accessTokenEnc: encryptedAccess,
-      refreshTokenEnc: encryptedRefresh,
-      scopes: params.scopes,
+      broker: 'alpaca',
+      mode: params.env,
+    },
+  });
+
+  if (existing) {
+    await prisma.brokerConnection.update({
+      where: { id: existing.id },
+      data: {
+        accessToken: encryptedAccess,
+        refreshToken: encryptedRefresh,
+        scope: params.scopes.join(' '),
+        expiresAt,
+        accountId: params.accountId,
+      },
+    });
+    return;
+  }
+
+  await prisma.brokerConnection.create({
+    data: {
+      userId: params.userId,
+      broker: 'alpaca',
+      mode: params.env,
+      accessToken: encryptedAccess,
+      refreshToken: encryptedRefresh,
+      scope: params.scopes.join(' '),
       expiresAt,
       accountId: params.accountId,
     },

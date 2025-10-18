@@ -292,7 +292,7 @@ export default function AutomationBot() {
               ? 'bg-green-100 dark:bg-green-900/30 text-green-800 dark:text-green-400' 
               : 'bg-red-100 dark:bg-red-900/30 text-red-800 dark:text-red-400'
           }`}>
-            {envMode.toUpperCase()} MODE
+            Trading Mode (orders only): {envMode.toUpperCase()}
           </div>
           
           <button
