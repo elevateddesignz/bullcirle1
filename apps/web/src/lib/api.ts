@@ -1,13 +1,6 @@
-import type { EnvMode } from '../contexts/EnvModeContext';
-import { getEnvModeSnapshot } from '../contexts/EnvModeContext';
-import type { User, SubscriptionTier } from '../types';
-import { supabase as supabaseClient } from './supabaseClient';
-
-// ---------- Supabase Setup (User, Profile, Subscriptions) ----------
-const supabase = supabaseClient;
-
+import { supabase } from './supabaseClient';
+// Re-export Supabase client for backwards compatibility
 export { supabase };
-
 /**
  * Fetch the authenticated user's profile and subscriptions
  */
