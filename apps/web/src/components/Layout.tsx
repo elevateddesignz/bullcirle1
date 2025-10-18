@@ -3,7 +3,6 @@ import React, { useState } from 'react';
 import { Link, useLocation, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
-  UserCircle,
   TrendingUp,
   BookOpen,
   LineChart,
@@ -14,7 +13,6 @@ import {
   Menu,
   X,
   Zap,
-  Users,
   Settings,
   Search as SearchIcon,
 } from 'lucide-react';

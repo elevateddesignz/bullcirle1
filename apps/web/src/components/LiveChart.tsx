@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ApexChart from 'react-apexcharts';
 
 interface Bar {
@@ -9,33 +9,39 @@ interface Bar {
   c: number;
 }
 
+type CandlePoint = { x: Date; y: [number, number, number, number] };
+type CandleSeries = { data: CandlePoint[] };
+
 const LiveChart = ({ symbol }: { symbol: string }) => {
-  const [series, setSeries] = useState([{ data: [] as any[] }]);
+  const [series, setSeries] = useState<CandleSeries[]>([{ data: [] }]);
 
-  const [options, setOptions] = useState({
-    chart: {
-      id: 'live-background',
-      type: 'candlestick',
-      background: 'transparent',
-      animations: {
-        enabled: true,
-        easing: 'linear',
-        dynamicAnimation: { speed: 1000 },
+  const options = useMemo(
+    () => ({
+      chart: {
+        id: 'live-background',
+        type: 'candlestick',
+        background: 'transparent',
+        animations: {
+          enabled: true,
+          easing: 'linear',
+          dynamicAnimation: { speed: 1000 },
+        },
+        toolbar: { show: false },
+        zoom: { enabled: false },
       },
-      toolbar: { show: false },
-      zoom: { enabled: false },
-    },
-    grid: { show: false },
-    xaxis: { type: 'datetime', labels: { show: false }, axisBorder: { show: false }, axisTicks: { show: false } },
-    yaxis: { show: false },
-    tooltip: { enabled: false },
-  });
+      grid: { show: false },
+      xaxis: { type: 'datetime', labels: { show: false }, axisBorder: { show: false }, axisTicks: { show: false } },
+      yaxis: { show: false },
+      tooltip: { enabled: false },
+    }),
+    []
+  );
 
-  const fetchData = async () => {
+  const fetchData = useCallback(async () => {
     try {
       const res = await fetch(`${import.meta.env.VITE_API_URL}/api/chart-data?symbol=${symbol}&timeframe=1D&market=stocks`);
-      const json = await res.json();
-      const bars: Bar[] = json.bars || [];
+      const json = (await res.json()) as { bars?: Bar[] };
+      const bars: Bar[] = Array.isArray(json.bars) ? json.bars : [];
 
       const formatted = bars.map((bar) => ({
         x: new Date(bar.t),
@@ -46,13 +52,13 @@ const LiveChart = ({ symbol }: { symbol: string }) => {
     } catch (err) {
       console.error('Chart fetch error:', err);
     }
-  };
+  }, [symbol]);
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
-  }, [symbol]);
+  }, [fetchData]);
 
   return (
     <div className="absolute inset-0 -z-10 opacity-10 pointer-events-none">

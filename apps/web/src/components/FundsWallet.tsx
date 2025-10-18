@@ -41,8 +41,12 @@ export default function FundsWallet() {
       setAchId(data.id);
       // Proceed to deposit step.
       setStep('deposit');
-    } catch (err: any) {
-      setError(err.message || 'An error occurred');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An error occurred');
+      }
     } finally {
       setLoading(false);
     }
@@ -103,8 +107,12 @@ export default function FundsWallet() {
       setBankAccount('');
       setAmount('');
       setAchId('');
-    } catch (err: any) {
-      setError(err.message || 'An error occurred during deposit');
+    } catch (err: unknown) {
+      if (err instanceof Error) {
+        setError(err.message);
+      } else {
+        setError('An error occurred during deposit');
+      }
     } finally {
       setIsProcessing(false);
     }

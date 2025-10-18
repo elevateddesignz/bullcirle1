@@ -2,8 +2,17 @@
 import React from 'react';
 import { TrendingUp, TrendingDown, DollarSign } from 'lucide-react';
 
+interface Position {
+  symbol: string;
+  unrealized_pl?: number | string | null;
+  market_value?: number | string | null;
+  qty?: number | string | null;
+  avg_entry_price?: number | string | null;
+  current_price?: number | string | null;
+}
+
 interface PositionsTableProps {
-  positions: any[];
+  positions: Position[];
 }
 
 const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
@@ -21,11 +30,22 @@ const PositionsTable: React.FC<PositionsTableProps> = ({ positions }) => {
     <div className="overflow-hidden">
       <div className="space-y-3">
         {positions.map((pos) => {
-          const unrealizedPL = parseFloat(pos.unrealized_pl || 0);
-          const marketValue = parseFloat(pos.market_value || 0);
-          const qty = parseFloat(pos.qty || 0);
-          const avgEntry = parseFloat(pos.avg_entry_price || 0);
-          const currentPrice = parseFloat(pos.current_price || 0);
+          const toNumber = (value: number | string | null | undefined): number => {
+            if (typeof value === 'number') {
+              return value;
+            }
+            if (typeof value === 'string') {
+              const parsed = Number.parseFloat(value);
+              return Number.isNaN(parsed) ? 0 : parsed;
+            }
+            return 0;
+          };
+
+          const unrealizedPL = toNumber(pos.unrealized_pl);
+          const marketValue = toNumber(pos.market_value);
+          const qty = toNumber(pos.qty);
+          const avgEntry = toNumber(pos.avg_entry_price);
+          const currentPrice = toNumber(pos.current_price);
           const isProfit = unrealizedPL >= 0;
           const plPercentage = avgEntry > 0 ? ((currentPrice - avgEntry) / avgEntry * 100) : 0;
 
