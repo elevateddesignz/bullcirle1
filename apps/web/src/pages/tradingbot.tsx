@@ -4,10 +4,10 @@ import { useTheme } from '../contexts/ThemeContext';
 import TrendBox from '../components/TrendBox';
 import LiveChart from '../components/LiveChart';
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { 
-  Bot, 
-  TrendingUp, 
-  TrendingDown, 
+import {
+  Bot,
+  TrendingUp,
+  TrendingDown,
   Play, 
   Pause, 
   Settings, 
@@ -28,6 +28,7 @@ import {
   CheckCircle,
   Info
 } from 'lucide-react';
+import { marketFetch, tradeFetch } from '../lib/api';
 
 const TWELVE_HOURS_MS = 12 * 60 * 60 * 1000;
 
@@ -95,24 +96,30 @@ export default function TradingBot() {
 
   useEffect(() => {
     if (!autoMode) return;
-  
-    const interval = setInterval(() => {
-      fetch(`${apiRoot}/api/tradingbot/auto`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ market })
-      })
-        .then((res) => res.json())
-        .then((data) => {
-          if (data?.executed?.length) {
-            setToast(`Auto-traded: ${data.executed.map((t: any) => t.symbol).join(', ')}`);
-          }
-        })
-        .catch((err) => setError(err.message || 'Auto trade failed'));
-    }, 60000);
-  
+
+    const tick = async () => {
+      try {
+        const res = await tradeFetch('/tradingbot/auto', {
+          method: 'POST',
+          envMode: envMode as 'paper' | 'live',
+          body: JSON.stringify({ market }),
+        });
+        if (!res.ok) {
+          throw new Error(`HTTP ${res.status}`);
+        }
+        const data = await res.json();
+        if (data?.executed?.length) {
+          setToast(`Auto-traded: ${data.executed.map((t: any) => t.symbol).join(', ')}`);
+        }
+      } catch (err: any) {
+        setError(err?.message || 'Auto trade failed');
+      }
+    };
+
+    void tick();
+    const interval = setInterval(() => void tick(), 60000);
     return () => clearInterval(interval);
-  }, [autoMode, market]);
+  }, [autoMode, market, envMode]);
 
   const [nextScanTime, setNextScanTime] = useState(getNextAvailableTimestamp());
   const [remainingTime, setRemainingTime] = useState('');
@@ -134,16 +141,13 @@ export default function TradingBot() {
     return () => clearInterval(interval);
   }, [nextScanTime]);
 
-  const apiRoot = import.meta.env.VITE_API_URL;
-
   const runSingle = async () => {
     setBusy(true);
     setError('');
     try {
-      const url = `${apiRoot}/api/tradingbot`;
-      const res = await fetch(url, {
+      const res = await tradeFetch('/tradingbot', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        envMode: envMode as 'paper' | 'live',
         body: JSON.stringify({ symbol, prompt: userPrompt }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -173,10 +177,9 @@ export default function TradingBot() {
     setBusy(true);
     setError('');
     try {
-      const url = `${apiRoot}/api/tradingbot/execute`;
-      const res = await fetch(url, {
+      const res = await tradeFetch('/tradingbot/execute', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        envMode: envMode as 'paper' | 'live',
         body: JSON.stringify({
           symbol,
           priceEstimate: 170,
@@ -184,14 +187,14 @@ export default function TradingBot() {
         }),
       });
       if (!res.ok) throw new Error(`Trade failed: HTTP ${res.status}`);
-      const result = await res.json();
+      await res.json();
       setToast(`Trade executed for ${symbol} with ${riskPercent}% risk`);
     } catch (e: any) {
       setError(e.message || 'Failed to execute trade');
     } finally {
       setBusy(false);
     }
-  };  
+  };
 
   const fetchPlays = async () => {
     setBusy(true);
@@ -199,8 +202,9 @@ export default function TradingBot() {
     setGainers([]);
     setLosers([]);
     try {
-      const url = `${apiRoot}/api/tradingbot/plays?market=${market}&limit=10`;
-      const res = await fetch(url);
+      const res = await tradeFetch(`/tradingbot/plays?market=${encodeURIComponent(market)}&limit=10`, {
+        envMode: envMode as 'paper' | 'live',
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const { gainers, losers } = await res.json();
       setGainers(gainers);
@@ -254,7 +258,7 @@ export default function TradingBot() {
               <div className="flex items-center space-x-2 px-3 py-1 bg-green-100 dark:bg-green-900/30 rounded-full">
                 <div className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></div>
                 <span className="text-sm font-medium text-green-700 dark:text-green-300">
-                  {envMode.toUpperCase()} Mode
+                  Trading Mode (orders only): {envMode.toUpperCase()}
                 </span>
               </div>
               {autoMode && (
@@ -410,7 +414,9 @@ export default function TradingBot() {
                   onClick={async () => {
                     setLoadingSymbols(true);
                     try {
-                      const res = await fetch(`${apiRoot}/api/tradingbot/fullscan/init`);
+                      const res = await tradeFetch('/tradingbot/fullscan/init', {
+                        envMode: envMode as 'paper' | 'live',
+                      });
                       const data = await res.json();
                       const next = setNextAvailableTimestamp();
                       setNextScanTime(next);
@@ -874,19 +880,32 @@ function CachedSymbolRow({
   const [change, setChange] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const apiRoot = import.meta.env.VITE_API_URL;
-
   useEffect(() => {
     const fetchQuote = async () => {
       try {
-        const url = `${apiRoot}/api/alpha-quotes?symbols=${symbol}`;
-        const res = await fetch(url);
-        const data = await res.json();
-        const quote = data.quotes[symbol];
-        const priceStr = quote?.['05. price'];
-        const changeStr = quote?.['10. change percent'];
-        if (priceStr) setPrice(parseFloat(priceStr));
-        if (changeStr) setChange(parseFloat(changeStr.replace('%', '')));
+        const [quoteRes, tradeRes, barsRes] = await Promise.all([
+          marketFetch(`/market/quote?symbol=${encodeURIComponent(symbol)}`),
+          marketFetch(`/market/trade/latest?symbol=${encodeURIComponent(symbol)}`),
+          marketFetch(`/market/bars?symbol=${encodeURIComponent(symbol)}&timeframe=5Min&limit=2`),
+        ]);
+        if (!quoteRes.ok) {
+          throw new Error(`HTTP ${quoteRes.status}`);
+        }
+        const tradeJson = tradeRes.ok ? await tradeRes.json() : null;
+        const barsPayload = barsRes.ok ? await barsRes.json() : null;
+        const bars = Array.isArray(barsPayload?.bars) ? barsPayload.bars : [];
+        const lastBar = bars[bars.length - 1];
+        const prevBar = bars[bars.length - 2];
+        const priceValue = typeof tradeJson?.trade?.price === 'number'
+          ? tradeJson.trade.price
+          : typeof lastBar?.c === 'number'
+          ? lastBar.c
+          : null;
+        if (priceValue !== null) setPrice(priceValue);
+        if (lastBar && prevBar) {
+          const pct = ((Number(lastBar.c) - Number(prevBar.c)) / Number(prevBar.c)) * 100;
+          if (Number.isFinite(pct)) setChange(pct);
+        }
       } catch {
         setPrice(null);
         setChange(null);

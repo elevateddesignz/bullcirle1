@@ -3,9 +3,19 @@ import jwt from 'jsonwebtoken';
 import { logger } from '../lib/logger.js';
 import type { Role } from './require-role.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || process.env.SUPABASE_JWT_SECRET;
+const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 
 type MaybeArray<T> = T | T[] | undefined;
+
+const TRADING_PREFIXES = ['/api/v2/alpaca', '/api/alpaca', '/api/tradingbot', '/api/autopilot'];
+
+declare global {
+  namespace Express {
+    interface Request {
+      envMode: 'paper' | 'live';
+    }
+  }
+}
 
 function normalizeRoles(raw: MaybeArray<string>): Role[] {
   if (!raw) return ['free'];
@@ -34,40 +44,73 @@ function extractVerification(payload: any): boolean {
   return false;
 }
 
-function extractEnvMode(req: Request): 'paper' | 'live' | undefined {
+function resolveEnvMode(req: Request): 'paper' | 'live' {
   const header = req.headers['x-env-mode'];
-  if (header === 'paper' || header === 'live') return header;
-  const query = req.query.env;
-  if (query === 'paper' || query === 'live') return query;
-  return undefined;
+  const value = Array.isArray(header) ? header[0] : header;
+  if (value === 'live') {
+    return 'live';
+  }
+  return 'paper';
+}
+
+function isTradingRequest(req: Request): boolean {
+  const url = req.originalUrl || req.url || '';
+  return TRADING_PREFIXES.some(prefix => url.startsWith(prefix));
 }
 
 export function attachAuthContext(req: Request, res: Response, next: NextFunction) {
+  req.envMode = resolveEnvMode(req);
+
   const header = req.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
+    if (isTradingRequest(req)) {
+      return res.status(401).json({ error: 'authentication required' });
+    }
     return next();
+  }
+
+  if (!SUPABASE_JWT_SECRET) {
+    logger.error('SUPABASE_JWT_SECRET not configured; rejecting authenticated request');
+    return res.status(500).json({ error: 'authentication misconfigured' });
   }
 
   const token = header.slice(7);
-  if (!JWT_SECRET) {
-    logger.warn('JWT secret not configured; skipping auth verification');
-    return next();
-  }
 
   try {
-    const payload = jwt.verify(token, JWT_SECRET);
+    const payload = jwt.verify(token, SUPABASE_JWT_SECRET) as jwt.JwtPayload & {
+      sub?: string;
+      email?: string;
+    };
+    const userId = payload.sub;
+    if (!userId) {
+      logger.warn('JWT payload missing subject');
+      if (isTradingRequest(req)) {
+        return res.status(401).json({ error: 'invalid token' });
+      }
+      return next();
+    }
+
     const roles = extractRoles(payload);
     const auth = {
-      userId: (payload as any).sub as string,
-      email: (payload as any).email as string | undefined,
+      userId,
+      email: payload.email,
       roles,
       isEmailVerified: extractVerification(payload),
-      env: extractEnvMode(req),
+      env: req.envMode,
       raw: payload,
     };
     req.auth = auth;
+    req.user = {
+      id: userId,
+      email: payload.email,
+      roles,
+    };
   } catch (error) {
     logger.warn({ err: error }, 'Failed to verify JWT token');
+    if (isTradingRequest(req)) {
+      return res.status(401).json({ error: 'invalid token' });
+    }
   }
+
   next();
 }

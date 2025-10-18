@@ -1,8 +1,8 @@
 import { useEffect, useState } from 'react';
 import ApexChart from 'react-apexcharts';
 import { useTheme } from '../contexts/ThemeContext';
-import { useEnvMode } from '../contexts/EnvModeContext';
-import { api } from '../lib/api'; // Your API client handling backend calls
+import { getMarketQuote, marketFetch } from '../lib/api';
+import type { MarketQuote } from '../lib/api';
 
 // Define supported timeframes and chart types.
 const timeframes = ['1D', '1W', '1M', '1Y'] as const;
@@ -14,6 +14,13 @@ const defaultSymbols: Record<string, string[]> = {
   crypto: ['BTCUSD', 'ETHUSD', 'XRPUSD', 'LTCUSD', 'BCHUSD'],
   forex: ['EURUSD', 'GBPUSD', 'USDJPY', 'AUDUSD', 'USDCAD'],
 };
+
+function formatPrice(value: number | null | undefined): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return `$${value.toFixed(2)}`;
+  }
+  return 'N/A';
+}
 
 interface TradingChartProps {
   // The market to use (stocks, crypto, or forex). For extra info, only stocks will show the overview.
@@ -31,8 +38,7 @@ export default function TradingChart({ market = 'stocks', symbol: initialSymbol 
   const [showSMA, setShowSMA] = useState(false);
   const [showRSI, setShowRSI] = useState(false);
   const { theme } = useTheme();
-  const { envMode } = useEnvMode();
-  const [overview, setOverview] = useState<any>(null);
+  const [quote, setQuote] = useState<MarketQuote | null>(null);
 
   // When the market prop changes, update the symbol to the default for that market.
   useEffect(() => {
@@ -46,38 +52,59 @@ export default function TradingChart({ market = 'stocks', symbol: initialSymbol 
     }
   }, [initialSymbol]);
 
-  // Fetch company overview for stocks (Alpha Vantage Overview API).
+  // Fetch latest quote information for stocks via the authenticated market API.
   useEffect(() => {
-    if (market === 'stocks') {
-      const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
-      if (!apiKey) {
-        console.warn('Alpha Vantage API key not found. Please set VITE_ALPHA_VANTAGE_API_KEY in your .env file.');
-        setOverview(null);
-        return;
-      }
-      
-      fetch(`https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${apiKey}`)
-        .then((res) => res.json())
-        .then((data) => setOverview(data))
-        .catch((err) => {
-          console.error("Failed to fetch company overview:", err);
-          setOverview(null);
-        });
-    } else {
-      setOverview(null);
+    if (market !== 'stocks') {
+      setQuote(null);
+      return;
     }
+
+    let canceled = false;
+
+    const loadQuote = async () => {
+      try {
+        const data = await getMarketQuote(symbol);
+        if (!canceled) {
+          setQuote(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch market quote', error);
+        if (!canceled) {
+          setQuote(null);
+        }
+      }
+    };
+
+    void loadQuote();
+    const interval = window.setInterval(loadQuote, 60_000);
+    return () => {
+      canceled = true;
+      window.clearInterval(interval);
+    };
   }, [symbol, market]);
 
   // Function to fetch chart data from the backend.
   // The backend should select the proper data provider based on the "market" parameter.
   const fetchChartData = async () => {
     try {
-      const response = await api.fetchChartData({
-        symbol,
-        timeframe: { '1D': '1Day', '1W': '1Week', '1M': '1Month', '1Y': '1Year' }[timeframe],
-        market,
+      const timeframeMap: Record<typeof timeframe, string> = {
+        '1D': '5Min',
+        '1W': '15Min',
+        '1M': '30Min',
+        '1Y': '60Min',
+      };
+      const tf = timeframeMap[timeframe];
+      const params = new URLSearchParams({
+        symbol: symbol.trim().toUpperCase(),
+        timeframe: tf,
+        limit: '500',
       });
-      const bars = response.bars;
+      const response = await marketFetch(`/market/bars?${params.toString()}`);
+      if (!response.ok) {
+        throw new Error(`Error fetching chart data: ${response.statusText}`);
+      }
+      const payload = await response.json() as { bars?: any[] };
+      const bars = Array.isArray(payload?.bars) ? payload.bars : [];
       if (!bars || bars.length === 0) {
         console.warn(`No data available for ${symbol} in market ${market}`);
         setSeries([]);
@@ -133,7 +160,7 @@ export default function TradingChart({ market = 'stocks', symbol: initialSymbol 
     fetchChartData();
     const interval = setInterval(fetchChartData, 30000);
     return () => clearInterval(interval);
-  }, [symbol, timeframe, chartType, envMode, showSMA, showRSI, market]);
+  }, [symbol, timeframe, chartType, showSMA, showRSI, market]);
 
   // ApexCharts options.
   const chartOptions = {
@@ -210,23 +237,21 @@ export default function TradingChart({ market = 'stocks', symbol: initialSymbol 
         <div className="mt-4">
           <div className="grid grid-cols-3 gap-4">
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">Market Cap</h2>
+              <h2 className="text-sm text-gray-600 dark:text-gray-400">Bid Price</h2>
               <p className="text-lg font-bold text-brand-primary">
-                {overview && overview.MarketCapitalization
-                  ? `$${Number(overview.MarketCapitalization).toLocaleString()}`
-                  : 'N/A'}
+                {formatPrice(quote?.bidPrice)}
               </p>
             </div>
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">Volume</h2>
+              <h2 className="text-sm text-gray-600 dark:text-gray-400">Ask Price</h2>
               <p className="text-lg font-bold text-brand-primary">
-                {overview && overview.Volume ? Number(overview.Volume).toLocaleString() : 'N/A'}
+                {formatPrice(quote?.askPrice)}
               </p>
             </div>
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">P/E Ratio</h2>
+              <h2 className="text-sm text-gray-600 dark:text-gray-400">Last Update</h2>
               <p className="text-lg font-bold text-brand-primary">
-                {overview && overview.PERatio ? overview.PERatio : 'N/A'}
+                {quote?.ts ? new Date(quote.ts).toLocaleString() : 'N/A'}
               </p>
             </div>
           </div>

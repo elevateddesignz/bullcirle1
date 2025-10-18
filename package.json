@@ -13,6 +13,8 @@
     "preview:web": "npm run preview --workspace apps/web",
     "dev:api": "npm run dev --workspace apps/api",
     "build:api": "npm run build --workspace apps/api || exit 0",
-    "start:api": "npm run start --workspace apps/api"
+    "start:api": "npm run start --workspace apps/api",
+    "lint:provider": "./scripts/check-provider-split.sh",
+    "precommit": "npm run lint:provider"
   }
 }
