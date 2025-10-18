@@ -1,145 +1,187 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import ApexChart from 'react-apexcharts';
 import type { ApexAxisChartSeries, ApexOptions } from 'apexcharts';
+
 import { useTheme } from '../contexts/ThemeContext';
-import type { ChartBar } from '../lib/api';
+import type { ChartBar, MarketQuote } from '../lib/api';
+import { fetchChartData, getMarketQuote } from '../lib/api';
+
+const chartTypes = ['candlestick', 'line'] as const;
+const timeframes = ['1D', '1W', '1M', '1Y'] as const;
+const timeframeRequestMap = {
+  '1D': '1Day',
+  '1W': '1Week',
+  '1M': '1Month',
+  '1Y': '1Year',
+} as const;
+
+const RSI_PERIOD = 14;
+
+type ChartType = typeof chartTypes[number];
+type Timeframe = typeof timeframes[number];
+
+type MarketType = 'stocks' | 'crypto' | 'forex';
+
+interface TradingChartProps {
+  symbol: string;
+  className?: string;
+  market?: MarketType;
+}
+
 interface CompanyOverview {
   MarketCapitalization?: string;
   Volume?: string;
   PERatio?: string;
 }
 
-  const [series, setSeries] = useState<ApexAxisChartSeries>([]);
-  const [overview, setOverview] = useState<CompanyOverview | null>(null);
+function formatPrice(value: number | null | undefined) {
+  if (value == null || Number.isNaN(value)) {
+    return 'N/A';
+  }
+  return `$${value.toFixed(2)}`;
+}
 
-    if (market !== 'stocks') {
-      setOverview(null);
-      return;
+function formatLargeNumber(value?: string | number | null) {
+  if (value == null || value === '') {
+    return 'N/A';
+  }
+  const numeric = typeof value === 'string' ? Number(value) : value;
+  if (!Number.isFinite(numeric)) {
+    return 'N/A';
+  }
+  if (numeric >= 1_000_000_000_000) return `${(numeric / 1_000_000_000_000).toFixed(2)}T`;
+  if (numeric >= 1_000_000_000) return `${(numeric / 1_000_000_000).toFixed(2)}B`;
+  if (numeric >= 1_000_000) return `${(numeric / 1_000_000).toFixed(2)}M`;
+  if (numeric >= 1_000) return `${(numeric / 1_000).toFixed(2)}K`;
+  return numeric.toLocaleString();
+}
+
+function calculateRSI(prices: number[], period: number = RSI_PERIOD): number[] {
+  if (prices.length <= period) {
+    return [];
+  }
+
+  const rsiValues: number[] = [];
+  for (let i = period; i < prices.length; i++) {
+    let gains = 0;
+    let losses = 0;
+    for (let j = i - period + 1; j <= i; j++) {
+      const change = prices[j] - prices[j - 1];
+      if (change >= 0) {
+        gains += change;
+      } else {
+        losses -= change;
+      }
+    }
+    const averageGain = gains / period;
+    const averageLoss = losses / period;
+    const rs = averageLoss === 0 ? 100 : averageGain / (averageLoss || 1);
+    const rsi = 100 - 100 / (1 + rs);
+    rsiValues.push(Number(rsi.toFixed(2)));
+  }
+
+  return rsiValues;
+}
+
+export default function TradingChart({ symbol, className, market = 'stocks' }: TradingChartProps) {
+  const { theme } = useTheme();
+  const normalizedSymbol = symbol.trim().toUpperCase();
+
+  const [chartType, setChartType] = useState<ChartType>('candlestick');
+  const [timeframe, setTimeframe] = useState<Timeframe>('1D');
+  const [showSMA, setShowSMA] = useState(true);
+  const [showRSI, setShowRSI] = useState(false);
+
+  const [bars, setBars] = useState<ChartBar[]>([]);
+  const [quote, setQuote] = useState<MarketQuote | null>(null);
+  const [overview, setOverview] = useState<CompanyOverview | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const loadChartData = useCallback(async () => {
+    if (!normalizedSymbol) {
+      return [] as ChartBar[];
     }
 
-    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
-    if (!apiKey) {
-      console.warn('Alpha Vantage API key not found. Please set VITE_ALPHA_VANTAGE_API_KEY in your .env file.');
-      return;
+    const params = {
+      symbol: normalizedSymbol,
+      timeframe: timeframeRequestMap[timeframe],
+      market,
+    };
 
-    let isActive = true;
+    const { bars: responseBars } = await fetchChartData(params);
+    return responseBars
+      .filter((bar): bar is ChartBar => (
+        typeof bar?.t === 'string'
+        && [bar.o, bar.h, bar.l, bar.c].every((value) => typeof value === 'number' && Number.isFinite(value))
+      ));
+  }, [market, normalizedSymbol, timeframe]);
 
-    const fetchOverview = async () => {
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
+
+    let canceled = false;
+
+    const run = async () => {
+      if (!normalizedSymbol) {
+        setBars([]);
+        return;
+      }
+
+      setIsLoading(true);
+      setError(null);
       try {
-        const res = await fetch(
-          `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${symbol}&apikey=${apiKey}`
-        );
-        if (!res.ok) {
-          throw new Error(`Failed to fetch company overview (${res.status})`);
-        }
-        const data = (await res.json()) as unknown;
-        if (!data || typeof data !== 'object' || 'Note' in (data as Record<string, unknown>)) {
-          if (isActive) {
-            setOverview(null);
-          }
-          return;
-        }
-        if (isActive) {
-          setOverview(data as CompanyOverview);
+        const sanitizedBars = await loadChartData();
+        if (!canceled) {
+          setBars(sanitizedBars);
         }
       } catch (err) {
-        console.error('Failed to fetch company overview:', err);
-        if (isActive) {
-          setOverview(null);
+        if (!canceled) {
+          console.error('Failed to fetch chart data', err);
+          setError(err instanceof Error ? err.message : 'Failed to load chart data');
+          setBars([]);
+        }
+      } finally {
+        if (!canceled) {
+          setIsLoading(false);
         }
       }
     };
 
-    fetchOverview();
+    void run();
+    const interval = window.setInterval(() => {
+      void run();
+    }, 30_000);
 
     return () => {
-      isActive = false;
+      canceled = true;
+      window.clearInterval(interval);
     };
-  }, [market, symbol]);
+  }, [loadChartData, normalizedSymbol]);
 
-  const timeframeMap = useMemo(
-    () => ({
-      '1D': '1Day',
-      '1W': '1Week',
-      '1M': '1Month',
-      '1Y': '1Year',
-    }),
-    []
-  );
+  useEffect(() => {
+    if (!normalizedSymbol) {
+      setQuote(null);
+      return;
+    }
 
-  const fetchChartData = useCallback(async () => {
-        timeframe: timeframeMap[timeframe],
-      const bars: ChartBar[] = Array.isArray(response.bars) ? response.bars : [];
-      if (bars.length === 0) {
+    if (typeof window === 'undefined') {
+      return undefined;
+    }
 
-      const transformedCandles = bars.map((bar) => ({
-        y: [bar.o, bar.h, bar.l, bar.c] as const,
+    let canceled = false;
 
-      const transformedLine = bars.map((bar) => ({
-
-      const smaSeries: ApexAxisChartSeries = showSMA
-        ? [
-            {
-              name: 'SMA (10)',
-              data: bars
-                .map((bar, index, arr) => {
-                  if (index < 9) {
-                    return null;
-                  }
-                  const window = arr.slice(index - 9, index + 1);
-                  const average =
-                    window.reduce((accumulator, item) => accumulator + item.c, 0) / window.length;
-                  return { x: new Date(bar.t), y: Number(average.toFixed(2)) };
-                })
-                .filter((point): point is { x: Date; y: number } => point !== null),
-            },
-          ]
-
-      const prices = bars.map((bar) => bar.c);
-      const rsiValues = showRSI ? calculateRSI(prices) : [];
-      const rsiSeries: ApexAxisChartSeries = showRSI && rsiValues.length > 0
-        ? [
-            {
-              name: 'RSI',
-              data: rsiValues
-                .map((value, index) => {
-                  const bar = bars[index + 14];
-                  if (!bar) {
-                    return null;
-                  }
-                  return { x: new Date(bar.t), y: value };
-                })
-                .filter((point): point is { x: Date; y: number } => point !== null),
-            },
-          ]
-
-      const baseSeries: ApexAxisChartSeries =
-        chartType === 'candlestick'
-          ? [
-              {
-                name: 'Price',
-                data: transformedCandles,
-              },
-            ]
-          : [
-              {
-                name: 'Price',
-                data: transformedLine,
-              },
-            ];
-
-      setSeries([...baseSeries, ...smaSeries, ...rsiSeries]);
-  }, [chartType, market, showRSI, showSMA, symbol, timeframe, timeframeMap]);
-
-  }, [envMode, fetchChartData]);
-  const chartOptions: ApexOptions = {
-    theme: { mode: theme === 'dark' ? 'dark' : 'light' },
-    xaxis: { type: 'datetime' },
+    const loadQuote = async () => {
+      try {
+        const data = await getMarketQuote(normalizedSymbol, market);
+        if (!canceled) {
           setQuote(data);
         }
-      } catch (error) {
-        console.error('Failed to fetch market quote', error);
+      } catch (err) {
         if (!canceled) {
+          console.warn('Failed to fetch market quote', err);
           setQuote(null);
         }
       }
@@ -147,214 +189,279 @@ interface CompanyOverview {
 
     void loadQuote();
     const interval = window.setInterval(loadQuote, 60_000);
+
     return () => {
       canceled = true;
       window.clearInterval(interval);
     };
-  }, [symbol, market]);
+  }, [market, normalizedSymbol]);
 
-  // Function to fetch chart data from the backend.
-  // The backend should select the proper data provider based on the "market" parameter.
-  const fetchChartData = async () => {
-    try {
-      const timeframeMap: Record<typeof timeframe, string> = {
-        '1D': '5Min',
-        '1W': '15Min',
-        '1M': '30Min',
-        '1Y': '60Min',
-      };
-      const tf = timeframeMap[timeframe];
-      const params = new URLSearchParams({
-        symbol: symbol.trim().toUpperCase(),
-        timeframe: tf,
-        limit: '500',
-      });
-      const response = await marketFetch(`/market/bars?${params.toString()}`);
-      if (!response.ok) {
-        throw new Error(`Error fetching chart data: ${response.statusText}`);
-      }
-      const payload = await response.json() as { bars?: any[] };
-      const bars = Array.isArray(payload?.bars) ? payload.bars : [];
-      if (!bars || bars.length === 0) {
-        console.warn(`No data available for ${symbol} in market ${market}`);
-        setSeries([]);
-        return;
-      }
-      // Transform bars for candlestick charts.
-      const transformedCandles = bars.map((bar: any) => ({
-        x: new Date(bar.t),
-        y: [bar.o, bar.h, bar.l, bar.c],
-      }));
-      // Transform bars for line charts.
-      const transformedLine = bars.map((bar: any) => ({
-        x: new Date(bar.t),
-        y: bar.c,
-      }));
-      // Calculate SMA (period = 10) if enabled.
-      const smaData = showSMA
-        ? [{
-            name: 'SMA (10)',
-            data: bars
-              .map((bar: any, i: number, arr: any[]) => ({
-                x: new Date(bar.t),
-                y: i >= 9
-                  ? parseFloat((arr.slice(i - 9, i + 1).reduce((acc, b) => acc + b.c, 0) / 10).toFixed(2))
-                  : null,
-              }))
-              .filter((point: any) => point.y !== null),
-          }]
-        : [];
-      const prices = bars.map((bar: any) => bar.c);
-      // Calculate RSI (period = 14) if enabled.
-      const rsiData = showRSI && prices.length > 14
-        ? [{
-            name: 'RSI',
-            data: calculateRSI(prices).map((r, i) => ({
-              x: new Date(bars[i + 14]?.t),
-              y: r,
-            })),
-          }]
-        : [];
-      // Choose the base series based on chart type.
-      const baseSeries = chartType === 'candlestick'
-        ? [{ name: 'Price', data: transformedCandles }]
-        : [{ name: 'Price', data: transformedLine }];
-      setSeries([...baseSeries, ...smaData, ...rsiData]);
-    } catch (err) {
-      console.error('❌ Failed to fetch or parse chart data:', err);
-    }
-  };
-
-  // Fetch chart data on mount and whenever dependencies change.
   useEffect(() => {
-    fetchChartData();
-    const interval = setInterval(fetchChartData, 30000);
-    return () => clearInterval(interval);
-  }, [symbol, timeframe, chartType, showSMA, showRSI, market]);
+    if (market !== 'stocks' || !normalizedSymbol) {
+      setOverview(null);
+      return;
+    }
 
-  // ApexCharts options.
-  const chartOptions = {
+    const apiKey = import.meta.env.VITE_ALPHA_VANTAGE_API_KEY;
+    if (!apiKey) {
+      setOverview(null);
+      return;
+    }
+
+    let canceled = false;
+
+    const loadOverview = async () => {
+      try {
+        const response = await fetch(
+          `https://www.alphavantage.co/query?function=OVERVIEW&symbol=${normalizedSymbol}&apikey=${apiKey}`,
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to fetch company overview (${response.status})`);
+        }
+        const data = await response.json() as unknown;
+        if (!canceled) {
+          if (data && typeof data === 'object' && !('Note' in (data as Record<string, unknown>))) {
+            setOverview(data as CompanyOverview);
+          } else {
+            setOverview(null);
+          }
+        }
+      } catch (err) {
+        if (!canceled) {
+          console.warn('Failed to fetch company overview', err);
+          setOverview(null);
+        }
+      }
+    };
+
+    void loadOverview();
+
+    return () => {
+      canceled = true;
+    };
+  }, [market, normalizedSymbol]);
+
+  const series = useMemo<ApexAxisChartSeries>(() => {
+    if (!bars.length) {
+      return [];
+    }
+
+    const baseSeries: ApexAxisChartSeries = chartType === 'candlestick'
+      ? [{
+          name: 'Price',
+          data: bars.map((bar) => ({
+            x: new Date(bar.t),
+            y: [bar.o, bar.h, bar.l, bar.c] as const,
+          })),
+        }]
+      : [{
+          name: 'Price',
+          data: bars.map((bar) => ({
+            x: new Date(bar.t),
+            y: Number(bar.c.toFixed(2)),
+          })),
+        }];
+
+    const smaSeries: ApexAxisChartSeries = showSMA
+      ? (() => {
+          const points = bars
+            .map((bar, index, array) => {
+              if (index < 9) {
+                return null;
+              }
+              const window = array.slice(index - 9, index + 1);
+              const average = window.reduce((total, item) => total + item.c, 0) / window.length;
+              return { x: new Date(bar.t), y: Number(average.toFixed(2)) };
+            })
+            .filter((point): point is { x: Date; y: number } => point !== null);
+
+          return points.length
+            ? [{ name: 'SMA (10)', data: points }]
+            : [];
+        })()
+      : [];
+
+    const rsiSeries: ApexAxisChartSeries = showRSI
+      ? (() => {
+          const prices = bars.map((bar) => bar.c);
+          const values = calculateRSI(prices, RSI_PERIOD);
+          if (!values.length) {
+            return [];
+          }
+          const points = values
+            .map((value, index) => {
+              const bar = bars[index + RSI_PERIOD];
+              if (!bar) {
+                return null;
+              }
+              return { x: new Date(bar.t), y: value };
+            })
+            .filter((point): point is { x: Date; y: number } => point !== null);
+
+          return points.length
+            ? [{ name: 'RSI', data: points }]
+            : [];
+        })()
+      : [];
+
+    return [...baseSeries, ...smaSeries, ...rsiSeries];
+  }, [bars, chartType, showRSI, showSMA]);
+
+  const chartOptions = useMemo<ApexOptions>(() => ({
     chart: {
       type: chartType,
       background: 'transparent',
       toolbar: { show: true },
     },
-    theme: { mode: theme === 'dark' ? 'dark' as 'dark' : 'light' as 'light' },
-    xaxis: { type: 'datetime' as 'datetime' },
-    yaxis: { tooltip: { enabled: true } },
-    tooltip: { shared: true, enabled: true },
-  };
+    theme: { mode: theme === 'dark' ? 'dark' : 'light' },
+    xaxis: { type: 'datetime' },
+    yaxis: [{
+      labels: {
+        formatter: (value: number) => value.toFixed(2),
+      },
+    }],
+    tooltip: {
+      shared: true,
+      theme: theme === 'dark' ? 'dark' : 'light',
+    },
+    legend: { show: true },
+    stroke: {
+      curve: 'smooth',
+      width: chartType === 'line' ? 2 : 1,
+    },
+  }), [chartType, theme]);
+
+  const containerClassName = ['p-4', className].filter(Boolean).join(' ');
 
   return (
-    <div className="p-4">
-      {/* Top Controls */}
+    <div className={containerClassName}>
       <div className="flex flex-wrap gap-4 justify-between items-center mb-4">
         <div className="space-x-2">
-          {/* Chart Type Buttons */}
           {chartTypes.map((type) => (
             <button
               key={type}
+              type="button"
               onClick={() => setChartType(type)}
-              className={`px-3 py-1 rounded ${
+              className={`px-3 py-1 rounded transition-colors ${
                 chartType === type
-                  ? 'bg-green-600 text-white'
-                  : 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-white'
+                  ? 'bg-green-600 text-white shadow'
+                  : 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
               }`}
             >
-              {type}
+              {type === 'candlestick' ? 'Candlestick' : 'Line'}
             </button>
           ))}
         </div>
+
         <div className="space-x-2">
-          {/* Timeframe Buttons */}
-          {timeframes.map((tf) => (
+          {timeframes.map((value) => (
             <button
-              key={tf}
-              onClick={() => setTimeframe(tf)}
-              className={`px-3 py-1 rounded ${
-                timeframe === tf
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-white'
+              key={value}
+              type="button"
+              onClick={() => setTimeframe(value)}
+              className={`px-3 py-1 rounded transition-colors ${
+                timeframe === value
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'bg-gray-200 dark:bg-gray-800 text-gray-800 dark:text-gray-200'
               }`}
             >
-              {tf}
+              {value}
             </button>
           ))}
         </div>
+
         <div className="space-x-3">
-          {/* Indicators Toggle */}
-          <label className="inline-flex items-center gap-1">
-            <input type="checkbox" checked={showSMA} onChange={() => setShowSMA(!showSMA)} />
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={showSMA}
+              onChange={() => setShowSMA((value) => !value)}
+            />
             SMA
           </label>
-          <label className="inline-flex items-center gap-1">
-            <input type="checkbox" checked={showRSI} onChange={() => setShowRSI(!showRSI)} />
+          <label className="inline-flex items-center gap-2 text-sm">
+            <input
+              type="checkbox"
+              checked={showRSI}
+              onChange={() => setShowRSI((value) => !value)}
+            />
             RSI
           </label>
         </div>
       </div>
 
-      {/* Chart Display */}
-      <ApexChart
-        options={chartOptions}
-        series={series}
-        type={chartType === 'candlestick' ? 'candlestick' : 'line'}
-        height={500}
-      />
+      <div className="relative">
+        <ApexChart
+          options={chartOptions}
+          series={series}
+          type={chartType === 'candlestick' ? 'candlestick' : 'line'}
+          height={500}
+        />
+        {isLoading && (
+          <div className="absolute inset-0 flex items-center justify-center bg-white/60 dark:bg-gray-900/60">
+            <span className="text-gray-700 dark:text-gray-200 font-medium">Loading chart…</span>
+          </div>
+        )}
+      </div>
 
-      {/* Additional Stock Overview Info */}
+      {error && (
+        <p className="mt-3 text-sm text-red-500">{error}</p>
+      )}
+
+      {!isLoading && !bars.length && !error && (
+        <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">
+          No market data available for {normalizedSymbol}.
+        </p>
+      )}
+
       {market === 'stocks' && (
-        <div className="mt-4">
-          <div className="grid grid-cols-3 gap-4">
+        <div className="mt-6 space-y-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">Bid Price</h2>
-              <p className="text-lg font-bold text-brand-primary">
-                {formatPrice(quote?.bidPrice)}
-              </p>
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">Bid Price</h3>
+              <p className="text-lg font-semibold text-brand-primary">{formatPrice(quote?.bidPrice)}</p>
             </div>
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">Ask Price</h2>
-              <p className="text-lg font-bold text-brand-primary">
-                {formatPrice(quote?.askPrice)}
-              </p>
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">Ask Price</h3>
+              <p className="text-lg font-semibold text-brand-primary">{formatPrice(quote?.askPrice)}</p>
             </div>
             <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
-              <h2 className="text-sm text-gray-600 dark:text-gray-400">Last Update</h2>
-              <p className="text-lg font-bold text-brand-primary">
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">Last Update</h3>
+              <p className="text-lg font-semibold text-brand-primary">
                 {quote?.ts ? new Date(quote.ts).toLocaleString() : 'N/A'}
               </p>
             </div>
           </div>
 
-          {/* Order Book Section (updates when symbol changes if available) */}
-          <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow mt-4">
-            <h2 className="text-lg font-bold text-brand-primary">Order Book</h2>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">Market Cap</h3>
+              <p className="text-lg font-semibold text-brand-primary">
+                {formatLargeNumber(overview?.MarketCapitalization)}
+              </p>
+            </div>
+            <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">Volume</h3>
+              <p className="text-lg font-semibold text-brand-primary">
+                {formatLargeNumber(overview?.Volume)}
+              </p>
+            </div>
+            <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
+              <h3 className="text-sm text-gray-600 dark:text-gray-400">P/E Ratio</h3>
+              <p className="text-lg font-semibold text-brand-primary">
+                {overview?.PERatio ? Number(overview.PERatio).toFixed(2) : 'N/A'}
+              </p>
+            </div>
+          </div>
+
+          <div className="bg-gray-100 dark:bg-gray-800 p-4 rounded shadow">
+            <h3 className="text-lg font-semibold text-brand-primary">Order Book</h3>
             <p className="text-sm text-gray-600 dark:text-gray-400">
-              {/* Update this section when a real order book API becomes available */}
-              Live order book data not available.
+              Live order book data is not available yet. Check back soon for real-time depth.
             </p>
           </div>
         </div>
       )}
     </div>
   );
-}
-
-// Helper: Simple RSI (Relative Strength Index) calculation.
-function calculateRSI(prices: number[], period: number = 14): number[] {
-  const gains: number[] = [];
-  const losses: number[] = [];
-  for (let i = 1; i < prices.length; i++) {
-    const diff = prices[i] - prices[i - 1];
-    gains.push(diff > 0 ? diff : 0);
-    losses.push(diff < 0 ? -diff : 0);
-  }
-  const rsi: number[] = [];
-  for (let i = 0; i <= gains.length - period; i++) {
-    const avgGain = gains.slice(i, i + period).reduce((a, b) => a + b, 0) / period;
-    const avgLoss = losses.slice(i, i + period).reduce((a, b) => a + b, 0) / period;
-    const rs = avgGain / (avgLoss || 1);
-    rsi.push(100 - 100 / (1 + rs));
-  }
-  return rsi.map((val) => parseFloat(val.toFixed(2)));
 }
