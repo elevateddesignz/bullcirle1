@@ -1,15 +1,20 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
 
+const allowedHeaders = [
+  'Content-Type',
+  'Authorization',
+  'authorization',
+  'apikey',
+  'Apikey',
+  'x-client-info',
+  'X-Client-Info',
+  'x-supabase-api-version',
+];
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-Deno.serve(async (req) => {
-  // Handle CORS preflight requests
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
+  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
       status: 204,
       headers: corsHeaders,
     });

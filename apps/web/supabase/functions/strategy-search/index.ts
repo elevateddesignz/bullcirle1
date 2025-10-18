@@ -1,16 +1,21 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
 import OpenAI from 'npm:openai@4.28.0';
 
+const allowedHeaders = [
+  "Content-Type",
+  "Authorization",
+  "authorization",
+  "apikey",
+  "Apikey",
+  "x-client-info",
+  "X-Client-Info",
+  "x-supabase-api-version",
+];
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": "Content-Type, Authorization",
-};
-
-Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
+  "Access-Control-Allow-Headers": allowedHeaders.join(", "),
       headers: corsHeaders,
     });
   }
