@@ -4,16 +4,21 @@ import {
   verifyAuthenticationResponse,
 } from 'npm:@simplewebauthn/server@8.3.5';
 
+const allowedHeaders = [
+  'Content-Type',
+  'Authorization',
+  'authorization',
+  'apikey',
+  'Apikey',
+  'x-client-info',
+  'X-Client-Info',
+  'x-supabase-api-version',
+];
+
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type, Authorization',
-};
-
-Deno.serve(async (req) => {
-  if (req.method === 'OPTIONS') {
-    return new Response(null, {
-      status: 204,
+  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
       headers: corsHeaders,
     });
   }
