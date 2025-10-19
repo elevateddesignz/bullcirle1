@@ -3,6 +3,7 @@ import { Globe, TrendingUp, TrendingDown, Search, ArrowRight, Star } from 'lucid
 import { useSearch } from '../contexts/SearchContext';
 import { useWatchlist } from '../contexts/WatchlistContext';
 import Watchlist from '../components/dashboard/Watchlist';
+import { resolveApiPath } from '../lib/backendConfig';
 
 const defaultStocks = ['AAPL', 'TSLA', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'AMD'];
 const defaultCryptos = ['BTCUSD', 'ETHUSD', 'XRPUSD', 'LTCUSD', 'BCHUSD'];
@@ -17,23 +18,19 @@ export default function Markets() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Determine the endpoint and default symbol list based on active market.
-  const getEndpointAndSymbols = () => {
-    const backendUrl = import.meta.env.VITE_API_URL;
-    if (!backendUrl) {
-      throw new Error('Missing backend URL environment variable');
-    }
-    if (activeMarket === 'forex') {
+  // Determine the API path and default symbol list based on the active market.
+  const getEndpointAndSymbols = (market: 'stocks' | 'crypto' | 'forex') => {
+    if (market === 'forex') {
       return {
-        endpoint: `${backendUrl}/api/alpha-forex`,
-        symbols: defaultForex
-      };
-    } else {
-      return {
-        endpoint: `${backendUrl}/api/alpha-quotes`,
-        symbols: activeMarket === 'stocks' ? defaultStocks : defaultCryptos
+        path: '/alpha-forex',
+        symbols: defaultForex,
       };
     }
+
+    return {
+      path: '/alpha-quotes',
+      symbols: market === 'stocks' ? defaultStocks : defaultCryptos,
+    };
   };
 
   // Fetch market data using the appropriate backend endpoint.
@@ -41,9 +38,9 @@ export default function Markets() {
     setIsLoading(true);
     setError(null);
     try {
-      const { endpoint, symbols } = getEndpointAndSymbols();
+      const { path, symbols } = getEndpointAndSymbols(market);
       const symbolQuery = symbols.join(',');
-      const url = `${endpoint}?symbols=${encodeURIComponent(symbolQuery)}`;
+      const url = resolveApiPath(`${path}?symbols=${encodeURIComponent(symbolQuery)}`);
       const res = await fetch(url);
       if (!res.ok) throw new Error(`Status ${res.status}`);
       const data = await res.json();
@@ -53,12 +50,12 @@ export default function Markets() {
         symbol,
         name: symbol, // Optionally, enhance with a company/asset lookup.
         price:
-          activeMarket === 'forex'
+          market === 'forex'
             ? parseFloat(data.quotes[symbol]?.["5. Exchange Rate"]) || 0
             : parseFloat(data.quotes[symbol]?.["05. price"]) || 0,
         // For forex, we may not have a previous close so set change to 0.
         change:
-          activeMarket === 'forex'
+          market === 'forex'
             ? 0
             : parseFloat(data.quotes[symbol]?.["09. change"]) || 0,
         market

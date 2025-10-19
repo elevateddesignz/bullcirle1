@@ -31,8 +31,6 @@ import OrdersTable      from '../components/dashboard/OrdersTable';
 import NewsFeed         from '../components/dashboard/NewsFeed';
 import Watchlist        from '../components/dashboard/Watchlist';
 
-import { Elements } from '@stripe/react-stripe-js';
-import stripePromise from '../stripePromise';
 import { marketFetch, tradeFetch } from '../lib/api';
 
 const MARKET_SYMBOLS = ['SPY', 'QQQ', 'DIA'];
@@ -533,9 +531,7 @@ export default function Dashboard() {
 
         {/* Funds Wallet */}
         <div className="bg-white dark:bg-gray-800/50 backdrop-blur-xl rounded-2xl border border-gray-200 dark:border-gray-700/50 shadow-lg">
-          <Elements stripe={stripePromise}>
-            <FundsWallet />
-          </Elements>
+          <FundsWallet />
         </div>
       </div>
     </div>

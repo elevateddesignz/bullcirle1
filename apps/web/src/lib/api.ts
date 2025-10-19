@@ -1,28 +1,14 @@
 import { supabase } from './supabaseClient';
+import { resolveApiPath } from './backendConfig';
 import type { User, SubscriptionTier } from '../types';
 import type { EnvMode } from '../contexts/EnvModeContext';
 import { getEnvModeSnapshot } from '../contexts/EnvModeContext';
 
 export { supabase };
 
-const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL;
-
-if (!backendBaseUrl) {
-  throw new Error('Missing backend URL environment variable (VITE_BACKEND_URL or VITE_API_URL)');
-}
-
 const ABSOLUTE_URL_REGEX = /^https?:\/\//i;
 
 type HeadersRecord = Record<string, string>;
-
-function normalizeApiPath(path: string): string {
-  if (ABSOLUTE_URL_REGEX.test(path)) {
-    return path;
-  }
-
-  const prefixed = path.startsWith('/') ? path : `/${path}`;
-  return prefixed.startsWith('/api') ? prefixed : `/api${prefixed}`;
-}
 
 function normalizeHeaders(headers?: HeadersInit): HeadersRecord {
   if (!headers) {
@@ -86,9 +72,7 @@ async function getAuthHeaders(extra?: HeadersInit): Promise<HeadersRecord> {
 
 export async function marketFetch(path: string, init: RequestInit = {}) {
   const headers = await getAuthHeaders(init.headers);
-  const target = ABSOLUTE_URL_REGEX.test(path)
-    ? path
-    : `${backendBaseUrl}${normalizeApiPath(path)}`;
+  const target = ABSOLUTE_URL_REGEX.test(path) ? path : resolveApiPath(path);
 
   return fetch(target, {
     ...init,
@@ -120,7 +104,7 @@ export async function tradeFetch(path: string, init: TradeFetchInit = {}) {
 
   const target = ABSOLUTE_URL_REGEX.test(path)
     ? path
-    : `${backendBaseUrl}${normalizeApiPath(path)}`;
+    : resolveApiPath(path);
 
   return fetch(target, {
     ...rest,

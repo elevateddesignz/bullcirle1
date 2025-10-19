@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import axios from 'axios';
 import { Clock } from 'lucide-react';
+import { resolveApiPath } from '../../lib/backendConfig';
 
 interface NewsArticle {
   title: string;
@@ -19,7 +20,7 @@ const NewsFeed: React.FC = () => {
     const fetchNews = async () => {
       setLoading(true);
       try {
-        const res = await axios.get(`${import.meta.env.VITE_API_URL}/api/alpha-news`);
+        const res = await axios.get(resolveApiPath('/alpha-news'));
         // Expect the endpoint returns an object with a "news" property.
         setNews(res.data.news);
       } catch (err) {

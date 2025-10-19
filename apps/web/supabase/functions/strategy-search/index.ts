@@ -1,151 +1,102 @@
-import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
 import OpenAI from 'npm:openai@4.28.0';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  "Content-Type",
-  "Authorization",
-  "authorization",
-  "apikey",
-  "Apikey",
-  "x-client-info",
-  "X-Client-Info",
-  "x-supabase-api-version",
-];
+function formatMarketData(marketData: unknown): string {
+  if (!marketData || typeof marketData !== 'object') {
+    return 'No market data provided';
+  }
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": allowedHeaders.join(", "),
-      headers: corsHeaders,
+  try {
+    const entries = Object.entries(marketData as Record<string, unknown>)
+      .map(([symbol, data]) => `${symbol}: ${JSON.stringify(data)}`);
+    return entries.join('\n');
+  } catch {
+    return 'Unable to format market data';
+  }
+}
+
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
+
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
-    const { symbols, marketData } = await req.json();
+    const { symbols, marketData } = await req.json().catch(() => ({}));
 
-    if (!symbols || !Array.isArray(symbols) || symbols.length === 0) {
-      return new Response(
-        JSON.stringify({ error: "Symbols array is required" }),
-        {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          status: 400,
-        }
-      );
+    if (!Array.isArray(symbols) || symbols.length === 0) {
+      return new Response(JSON.stringify({ error: 'Symbols array is required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Initialize OpenAI client
-    const openai = new OpenAI({
-      apiKey: Deno.env.get("OPENAI_API_KEY"),
-    });
-
-    if (!openai.apiKey) {
-      return new Response(
-        JSON.stringify({ error: "OpenAI API key not configured" }),
-        {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          status: 500,
-        }
-      );
+    const apiKey = Deno.env.get('OPENAI_API_KEY');
+    if (!apiKey) {
+      return new Response(JSON.stringify({ error: 'OpenAI API key not configured' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Format market data for analysis
-    const formattedData = formatMarketData(marketData || {});
+    const openai = new OpenAI({ apiKey });
 
-    // Create prompt for OpenAI
     const prompt = `
 You are an expert trading algorithm. Analyze the following market data for these symbols: ${symbols.join(', ')}
 
-${formattedData}
+${formatMarketData(marketData)}
 
 Based on this data, identify the best trading opportunity among these symbols. Provide your recommendation in the following JSON format:
 {
-  "symbol": "string", // The best symbol to trade
-  "strategy": "string", // Name of the strategy (e.g., "Momentum", "Mean Reversion", "Trend Following")
-  "recommendation": "string", // Must be one of: "buy", "sell", "hold"
-  "confidence": number, // 0-100 confidence score
-  "analysis": "string", // Brief explanation of the analysis (max 200 chars)
-  "stopLoss": number, // Recommended stop loss percentage (e.g., 0.02 for 2%)
-  "takeProfit": number // Recommended take profit percentage (e.g., 0.05 for 5%)
+  "symbol": "string",
+  "strategy": "string",
+  "recommendation": "string",
+  "confidence": number,
+  "analysis": "string",
+  "stopLoss": number,
+  "takeProfit": number
 }
 
 Only respond with valid JSON. No other text.
-`;
+`.trim();
 
-    // Call OpenAI API
-    const response = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
-      messages: [{ role: "user", content: prompt }],
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-3.5-turbo',
+      messages: [{ role: 'user', content: prompt }],
       temperature: 0.2,
       max_tokens: 500,
     });
 
-    // Parse the response
-    const content = response.choices[0].message.content?.trim() || "{}";
-    let result;
-    
+    const content = completion.choices[0].message.content?.trim() ?? '{}';
+
     try {
-      result = JSON.parse(content);
-    } catch (e) {
-      console.error("Failed to parse OpenAI response:", content);
+      const result = JSON.parse(content);
+      return new Response(JSON.stringify(result), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    } catch {
+      console.error('Failed to parse OpenAI response:', content);
       return new Response(
-        JSON.stringify({ error: "Failed to parse strategy recommendation" }),
+        JSON.stringify({ error: 'Failed to parse strategy recommendation' }),
         {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
           status: 500,
-        }
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
       );
     }
-
-    return new Response(
-      JSON.stringify(result),
-      {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        status: 200,
-      }
-    );
   } catch (error) {
-    console.error("Error in strategy-search function:", error);
-    return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
-      {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        status: 500,
-      }
-    );
+    console.error('Error in strategy-search function:', error);
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });
-
-function formatMarketData(marketData: any): string {
-  if (typeof marketData !== 'object' || marketData === null) {
-    return "No market data provided";
-  }
-  
-  let result = "";
-  
-  // Handle different data formats
-  if (Array.isArray(marketData)) {
-    // Array of objects (e.g., multiple symbols or time series)
-    result = marketData.map(item => {
-      if (typeof item === 'object' && item !== null) {
-        const symbol = item.symbol || "Unknown";
-        const price = item.price || item.close || item.value || "N/A";
-        const change = item.change || item.changePercent || "N/A";
-        
-        return `Symbol: ${symbol}, Price: ${price}, Change: ${change}`;
-      }
-      return String(item);
-    }).join('\n');
-  } else {
-    // Single object with properties
-    result = Object.entries(marketData)
-      .map(([key, value]) => {
-        if (typeof value === 'object' && value !== null) {
-          return `${key}: ${JSON.stringify(value)}`;
-        }
-        return `${key}: ${value}`;
-      })
-      .join('\n');
-  }
-  
-  return result || "No market data available";
-}

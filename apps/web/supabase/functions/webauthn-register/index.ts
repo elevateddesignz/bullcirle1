@@ -1,95 +1,67 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
 import { generateRegistrationOptions } from 'npm:@simplewebauthn/server@8.3.5';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  'Content-Type',
-  'Authorization',
-  'authorization',
-  'apikey',
-  'Apikey',
-  'x-client-info',
-  'X-Client-Info',
-  'x-supabase-api-version',
-];
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
-      headers: corsHeaders,
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ data: { error: 'Method not allowed' } }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
-    // Validate environment variables
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      console.error('Missing environment variables:', {
-        hasUrl: !!supabaseUrl,
-        hasServiceKey: !!supabaseServiceKey
-      });
       return new Response(
-        JSON.stringify({ 
-          data: { error: 'Server configuration error' }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 500,
-        }
+        JSON.stringify({ data: { error: 'Server configuration error' } }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    const body = await req.json().catch(() => ({}));
-    const { userId, email } = body;
-
-    if (!userId || !email) {
+    const { userId, email } = await req.json().catch(() => ({}));
+    if (!userId || typeof email !== 'string' || !email.trim()) {
       return new Response(
-        JSON.stringify({ 
-          data: { error: 'Missing required parameters' }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 400,
-        }
+        JSON.stringify({ data: { error: 'Missing required parameters' } }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Check for existing credentials
     const { data: existingCreds } = await supabase
       .from('webauthn_credentials')
       .select('credential_id')
       .eq('user_id', userId);
 
-    // Generate registration options with enhanced compatibility
     const options = await generateRegistrationOptions({
       rpName: 'Bull Circle',
       rpID: new URL(supabaseUrl).hostname,
       userID: userId,
       userName: email,
-      userDisplayName: email.split('@')[0],
-      attestationType: 'none', // Don't require attestation for better compatibility
-      excludeCredentials: existingCreds?.map(cred => ({
-        id: new Uint8Array(cred.credential_id),
+      userDisplayName: email.split('@')[0] ?? email,
+      attestationType: 'none',
+      excludeCredentials: existingCreds?.map((cred) => ({
+        id: new Uint8Array(cred.credential_id as Uint8Array),
         type: 'public-key',
         transports: ['internal', 'usb', 'nfc', 'ble', 'hybrid'],
-      })) || [],
+      })) ?? [],
       authenticatorSelection: {
-        // Allow both platform and cross-platform authenticators
         authenticatorAttachment: undefined,
         requireResidentKey: false,
         residentKey: 'preferred',
-        userVerification: 'preferred', // Prefer but don't require user verification
+        userVerification: 'preferred',
       },
-      supportedAlgorithmIDs: [-7, -35, -36, -257, -258, -259], // Support multiple algorithms
-      timeout: 60000, // 60 seconds timeout
+      supportedAlgorithmIDs: [-7, -35, -36, -257, -258, -259],
+      timeout: 60_000,
     });
 
-    // Store challenge in database
     const { error: challengeError } = await supabase
       .from('webauthn_challenges')
       .insert({
@@ -100,39 +72,22 @@ const corsHeaders = {
 
     if (challengeError) {
       console.error('Error storing challenge:', challengeError);
-      return new Response(
-        JSON.stringify({ 
-          data: { error: 'Failed to store challenge' }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 400,
-        }
-      );
+      return new Response(JSON.stringify({ data: { error: 'Failed to store challenge' } }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    return new Response(
-      JSON.stringify({ 
-        data: { challenge: options }
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      }
-    );
+    return new Response(JSON.stringify({ data: { challenge: options } }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('Unexpected error in webauthn-register:', error);
+    const message = error instanceof Error ? error.message : String(error);
     return new Response(
-      JSON.stringify({ 
-        data: { 
-          error: 'Registration failed',
-          details: error instanceof Error ? error.message : String(error)
-        }
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500,
-      }
+      JSON.stringify({ data: { error: 'Registration failed', details: message } }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });

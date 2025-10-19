@@ -3,65 +3,76 @@ import {
   verifyRegistrationResponse,
   verifyAuthenticationResponse,
 } from 'npm:@simplewebauthn/server@8.3.5';
+import type {
+  RegistrationResponseJSON,
+  AuthenticationResponseJSON,
+} from 'npm:@simplewebauthn/typescript-types@8.3.5';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  'Content-Type',
-  'Authorization',
-  'authorization',
-  'apikey',
-  'Apikey',
-  'x-client-info',
-  'X-Client-Info',
-  'x-supabase-api-version',
-];
+type RegistrationBody = {
+  userId: string;
+  credential: unknown;
+};
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
-      headers: corsHeaders,
+type AuthenticationBody = {
+  email: string;
+  assertion: unknown;
+};
+
+function toUint8Array(value: unknown): Uint8Array {
+  if (value instanceof Uint8Array) {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return new Uint8Array(value as number[]);
+  }
+  if (typeof value === 'string') {
+    const binary = atob(value);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes;
+  }
+  throw new Error('Unsupported binary format');
+}
+
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
+
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
-    // Validate environment variables
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      console.error('Missing environment variables:', {
-        hasUrl: !!supabaseUrl,
-        hasServiceKey: !!supabaseServiceKey
+      return new Response(JSON.stringify({ error: 'Server configuration error' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
-      return new Response(
-        JSON.stringify({ 
-          error: 'Server configuration error'
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 500,
-        }
-      );
     }
 
-    const body = await req.json().catch(() => ({}));
+    const rawBody = (await req.json().catch(() => ({}))) as Record<string, unknown>;
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    if (body.credential) {
-      // Handle registration verification
-      const { userId, credential } = body;
+    if ('credential' in rawBody) {
+      const { userId, credential } = rawBody as RegistrationBody;
 
       if (!userId || !credential) {
         return new Response(
           JSON.stringify({ error: 'Missing required parameters for registration' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         );
       }
 
-      // Get stored challenge
       const { data: challengeData, error: challengeError } = await supabase
         .from('webauthn_challenges')
         .select('challenge')
@@ -71,98 +82,80 @@ const corsHeaders = {
         .limit(1)
         .single();
 
-      if (challengeError) {
+      if (challengeError || !challengeData?.challenge) {
         console.error('Error fetching challenge:', challengeError);
-        return new Response(
-          JSON.stringify({ error: 'Challenge not found' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return new Response(JSON.stringify({ error: 'Challenge not found' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Verify registration
+      const registrationResponse = credential as RegistrationResponseJSON;
+
       const verification = await verifyRegistrationResponse({
-        response: credential,
+        response: registrationResponse,
         expectedChallenge: challengeData.challenge,
         expectedOrigin: new URL(supabaseUrl).origin,
         expectedRPID: new URL(supabaseUrl).hostname,
       });
 
-      if (!verification.verified) {
-        return new Response(
-          JSON.stringify({ error: 'Registration verification failed' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+      if (!verification.verified || !verification.registrationInfo) {
+        return new Response(JSON.stringify({ error: 'Registration verification failed' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Store credential
-      const { error: credentialError } = await supabase
-        .from('webauthn_credentials')
-        .insert({
-          user_id: userId,
-          credential_id: credential.id,
-          public_key: verification.registrationInfo?.credentialPublicKey,
-          counter: verification.registrationInfo?.counter ?? 0,
-        });
+      const { credentialPublicKey, credentialID, counter } = verification.registrationInfo;
+
+      const { error: credentialError } = await supabase.from('webauthn_credentials').insert({
+        user_id: userId,
+        credential_id: credentialID,
+        public_key: credentialPublicKey,
+        counter: counter ?? 0,
+      });
 
       if (credentialError) {
         console.error('Error storing credential:', credentialError);
-        return new Response(
-          JSON.stringify({ error: 'Failed to store credential' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return new Response(JSON.stringify({ error: 'Failed to store credential' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Clean up used challenge
       await supabase
         .from('webauthn_challenges')
         .delete()
         .eq('user_id', userId)
         .eq('type', 'registration');
 
-      return new Response(
-        JSON.stringify({ success: true }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        }
-      );
-    } else if (body.assertion) {
-      // Handle authentication verification
-      const { email, assertion } = body;
+      return new Response(JSON.stringify({ success: true }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    if ('assertion' in rawBody) {
+      const { email, assertion } = rawBody as AuthenticationBody;
 
       if (!email || !assertion) {
         return new Response(
           JSON.stringify({ error: 'Missing required parameters for authentication' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
+          { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
         );
       }
 
-      // Get user by email
+      const authenticationResponse = assertion as AuthenticationResponseJSON;
+
       const { data: userData, error: userError } = await supabase.auth.admin.getUserByEmail(email);
-      
+
       if (userError || !userData?.user) {
-        return new Response(
-          JSON.stringify({ error: 'User not found' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return new Response(JSON.stringify({ error: 'User not found' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Get stored challenge and credential
       const [challengeResult, credentialResult] = await Promise.all([
         supabase
           .from('webauthn_challenges')
@@ -175,108 +168,84 @@ const corsHeaders = {
         supabase
           .from('webauthn_credentials')
           .select('*')
-          .eq('credential_id', assertion.id)
+          .eq('credential_id', authenticationResponse.id)
           .single(),
       ]);
 
       if (challengeResult.error || credentialResult.error) {
         console.error('Error fetching challenge or credential:', {
           challengeError: challengeResult.error,
-          credentialError: credentialResult.error
+          credentialError: credentialResult.error,
         });
-        return new Response(
-          JSON.stringify({ error: 'Invalid challenge or credential' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return new Response(JSON.stringify({ error: 'Invalid challenge or credential' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Verify authentication
       const verification = await verifyAuthenticationResponse({
-        response: assertion,
+        response: authenticationResponse,
         expectedChallenge: challengeResult.data.challenge,
         expectedOrigin: new URL(supabaseUrl).origin,
         expectedRPID: new URL(supabaseUrl).hostname,
         authenticator: {
           credentialPublicKey: credentialResult.data.public_key,
-          credentialID: new Uint8Array(credentialResult.data.credential_id),
+          credentialID: toUint8Array(credentialResult.data.credential_id),
           counter: credentialResult.data.counter,
         },
       });
 
-      if (!verification.verified) {
-        return new Response(
-          JSON.stringify({ error: 'Authentication verification failed' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+      if (!verification.verified || !verification.authenticationInfo) {
+        return new Response(JSON.stringify({ error: 'Authentication verification failed' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
-      // Update credential counter
       await supabase
         .from('webauthn_credentials')
         .update({ counter: verification.authenticationInfo.newCounter })
-        .eq('credential_id', assertion.id);
+        .eq('credential_id', authenticationResponse.id);
 
-      // Clean up used challenge
       await supabase
         .from('webauthn_challenges')
         .delete()
         .eq('user_id', userData.user.id)
         .eq('type', 'authentication');
 
-      // Generate session token for the user
       const { data: sessionData, error: sessionError } = await supabase.auth.admin.generateLink({
         type: 'magiclink',
-        email: email,
+        email,
       });
 
       if (sessionError) {
         console.error('Error generating session:', sessionError);
-        return new Response(
-          JSON.stringify({ error: 'Failed to create session' }),
-          {
-            headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-            status: 400,
-          }
-        );
+        return new Response(JSON.stringify({ error: 'Failed to create session' }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        });
       }
 
       return new Response(
-        JSON.stringify({ 
+        JSON.stringify({
           success: true,
           user: userData.user,
-          session: sessionData
+          session: sessionData,
         }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        }
+        { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    return new Response(
-      JSON.stringify({ error: 'Invalid request format' }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 400,
-      }
-    );
+    return new Response(JSON.stringify({ error: 'Invalid request format' }), {
+      status: 400,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (error) {
     console.error('Unexpected error in webauthn-verify:', error);
+    const message = error instanceof Error ? error.message : String(error);
     return new Response(
-      JSON.stringify({ 
-        error: 'Verification failed',
-        details: error instanceof Error ? error.message : String(error)
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500,
-      }
+      JSON.stringify({ error: 'Verification failed', details: message }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });

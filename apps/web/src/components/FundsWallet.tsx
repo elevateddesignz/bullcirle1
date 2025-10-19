@@ -1,7 +1,7 @@
 // src/components/FundsWallet.tsx
 import React, { useState } from 'react';
-import { CardElement, useStripe, useElements } from '@stripe/react-stripe-js';
 import toast from 'react-hot-toast';
+import { resolveApiPath } from '../lib/backendConfig';
 
 export default function FundsWallet() {
   // Steps: "link" (for bank linking) and "deposit" (for depositing funds)
@@ -13,11 +13,6 @@ export default function FundsWallet() {
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Stripe hooks for the deposit step.
-  const stripe = useStripe();
-  const elements = useElements();
-  const [stripeError, setStripeError] = useState<string | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
 
   // Simulated bank linking using your backend ACH endpoint.
@@ -25,7 +20,7 @@ export default function FundsWallet() {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ach/link`, {
+      const res = await fetch(resolveApiPath('/ach/link'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -41,6 +36,7 @@ export default function FundsWallet() {
       setAchId(data.id);
       // Proceed to deposit step.
       setStep('deposit');
+      toast.success('Bank account linked successfully');
     } catch (err: unknown) {
       if (err instanceof Error) {
         setError(err.message);
@@ -52,53 +48,33 @@ export default function FundsWallet() {
     }
   };
 
-  // Handle depositing funds with Stripe.
+  // Handle depositing funds via Alpaca ACH.
   const depositFunds = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsProcessing(true);
     setError(null);
-    setStripeError(null);
 
-    if (!stripe || !elements) {
-      setStripeError('Stripe has not loaded.');
-      setIsProcessing(false);
-      return;
-    }
-
-    const cardElement = elements.getElement(CardElement);
-    if (!cardElement) {
-      setStripeError('Card element not found.');
-      setIsProcessing(false);
-      return;
-    }
-
-    // Create a payment method using the card element.
-    const { error: stripeErr, paymentMethod } = await stripe.createPaymentMethod({
-      type: 'card',
-      card: cardElement,
-    });
-
-    if (stripeErr) {
-      setStripeError(stripeErr.message || 'Failed to create payment method');
+    const parsedAmount = Number.parseFloat(amount);
+    if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+      setError('Enter a valid deposit amount.');
       setIsProcessing(false);
       return;
     }
 
     try {
-      // Send paymentMethod.id and ACH relationship id along with the deposit amount to your backend.
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/ach/deposit`, {
+      const res = await fetch(resolveApiPath('/ach/deposit'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ach_relationship_id: achId,
-          amount: parseFloat(amount),
-          stripePaymentMethodId: paymentMethod?.id,
+          amount: parsedAmount,
         }),
       });
       const data = await res.json();
       if (!res.ok) {
         throw new Error(data.error || 'Deposit failed');
       }
+
       toast.success('Funds deposit initiated successfully!');
       // Reset to linking state.
       setStep('link');
@@ -151,35 +127,21 @@ export default function FundsWallet() {
           </button>
         </div>
       ) : (
-        <div className="space-y-4">
+        <form onSubmit={depositFunds} className="space-y-4">
+          <p className="text-sm text-gray-500 dark:text-gray-400">
+            Deposit requests are submitted via the Alpaca ACH API using your linked bank
+            relationship.
+          </p>
           <input
             placeholder="Deposit Amount"
             className="input"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
           />
-          {/* Stripe Checkout Form */}
-          <form onSubmit={depositFunds} className="space-y-4">
-            <div className="p-4 border border-gray-300 rounded">
-              <CardElement
-                options={{
-                  style: {
-                    base: {
-                      fontSize: '16px',
-                      color: '#424770',
-                      '::placeholder': { color: '#aab7c4' },
-                    },
-                    invalid: { color: '#9e2146' },
-                  },
-                }}
-              />
-            </div>
-            {stripeError && <div className="text-red-500 text-sm">{stripeError}</div>}
-            <button type="submit" className="btn-primary w-full" disabled={isProcessing}>
-              {isProcessing ? 'Depositing...' : 'Deposit Funds'}
-            </button>
-          </form>
-        </div>
+          <button type="submit" className="btn-primary w-full" disabled={isProcessing}>
+            {isProcessing ? 'Submitting...' : 'Deposit Funds'}
+          </button>
+        </form>
       )}
     </div>
   );

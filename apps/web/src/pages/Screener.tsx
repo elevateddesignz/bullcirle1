@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Filter, Download } from 'lucide-react';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface StockData {
   symbol: string;
@@ -66,7 +67,7 @@ export default function Screener() {
   const navigate = useNavigate();
 
   // Update this URL to point to your backend endpoint that proxies the Alpha Vantage CSV response.
-  const backendListingsURL = `${import.meta.env.VITE_API_URL}/api/alpha-listings`;
+  const backendListingsURL = resolveApiPath('/alpha-listings');
 
   const fetchStockListings = async () => {
     setLoading(true);

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Search } from 'lucide-react';
 import { useSearch } from '../contexts/SearchContext';
 import SearchResults from './SearchResults';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface SearchBarProps {
   placeholder?: string;
@@ -23,9 +24,7 @@ export default function SearchBar({
       setLoading(true);
       try {
         const response = await fetch(
-          `${import.meta.env.VITE_API_URL}/api/alpha-search?query=${encodeURIComponent(
-            searchQuery
-          )}`
+          resolveApiPath(`/alpha-search?query=${encodeURIComponent(searchQuery)}`),
         );
         if (!response.ok) {
           throw new Error(`HTTP error ${response.status}`);

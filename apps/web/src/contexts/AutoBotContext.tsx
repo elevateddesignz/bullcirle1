@@ -8,6 +8,7 @@ import React, {
 } from 'react';
 import { useEnvMode } from './EnvModeContext';
 import { analyzeStock, executeTrade, runTradingBot, findBestStrategy } from '../lib/tradingBotService';
+import { resolveApiPath } from '../lib/backendConfig';
 
 export interface StartOpts {
   targetProfit: number;
@@ -75,8 +76,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
 
   // Fetch & return the latest equity
   const fetchEquity = useCallback(async (): Promise<number> => {
-    const api = import.meta.env.VITE_API_URL || '';
-    const res = await fetch(`${api}/api/account?mode=${modeParam}`, { headers: getHeaders() });
+    const res = await fetch(resolveApiPath(`/account?mode=${modeParam}`), { headers: getHeaders() });
     if (!res.ok) throw new Error(`Equity HTTP ${res.status}`);
     const { account } = await res.json();
     const eq = parseFloat(account.equity);
@@ -87,7 +87,6 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
   // One bot cycle
   const tick = useCallback(async () => {
     if (!runningRef.current) return;
-    const api = import.meta.env.VITE_API_URL || '';
     const hdr = getHeaders();
     const { targetProfit, stopLossPct, takeProfitPct } = optsRef.current;
 
@@ -100,7 +99,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
       addLog(`Equity: $${currentEq.toFixed(2)}`);
 
       // 2) Market hours check
-      const clockRes = await fetch(`${api}/api/clock?mode=${modeParam}`, { headers: hdr });
+      const clockRes = await fetch(resolveApiPath(`/clock?mode=${modeParam}`), { headers: hdr });
       if (clockRes.ok) {
         const { is_open, next_open } = await clockRes.json();
         if (!is_open) {

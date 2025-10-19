@@ -4,6 +4,7 @@ import { TrendingUp, TrendingDown, ChevronDown } from 'lucide-react';
 import { useSearch } from '../contexts/SearchContext';
 import { useTheme } from '../contexts/ThemeContext';
 import { useNavigate } from 'react-router-dom';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface TickerItem {
   symbol: string;
@@ -41,10 +42,6 @@ export default function StockTicker() {
   const containerBg = theme === 'dark' ? 'bg-gray-900/95' : 'bg-white/95';
   const textColor = theme === 'dark' ? 'text-white' : 'text-gray-900';
 
-  // Use Vite env variables.
-  const backendUrl = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL;
-  if (!backendUrl) throw new Error('Missing backend URL environment variable');
-
   // Fetch market data from your backend.
   useEffect(() => {
     setError(null);
@@ -52,12 +49,10 @@ export default function StockTicker() {
     async function fetchMarketData() {
       try {
         const symbols = watchlist.join(',');
-        let url = '';
-        if (selectedMarket === 'forex') {
-          url = `${backendUrl}/api/alpha-forex?symbols=${encodeURIComponent(symbols)}`;
-        } else {
-          url = `${backendUrl}/api/alpha-quotes?symbols=${encodeURIComponent(symbols)}`;
-        }
+        const apiPath = selectedMarket === 'forex'
+          ? `/alpha-forex?symbols=${encodeURIComponent(symbols)}`
+          : `/alpha-quotes?symbols=${encodeURIComponent(symbols)}`;
+        const url = resolveApiPath(apiPath);
         const response = await fetch(url);
         if (!response.ok) throw new Error(`HTTP error ${response.status}`);
         const json = (await response.json()) as unknown;
@@ -93,7 +88,7 @@ export default function StockTicker() {
     fetchMarketData();
     const interval = setInterval(fetchMarketData, 30000);
     return () => clearInterval(interval);
-  }, [backendUrl, watchlist, selectedMarket]);
+  }, [watchlist, selectedMarket]);
 
   // Update the watchlist based on the input value.
   const handleWatchlistUpdate = () => {

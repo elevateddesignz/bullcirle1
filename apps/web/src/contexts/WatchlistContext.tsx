@@ -1,4 +1,5 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { resolveApiPath } from '../lib/backendConfig';
 
 export interface WatchlistItem {
   symbol: string;
@@ -92,8 +93,9 @@ export const WatchlistProvider: React.FC<{ children: React.ReactNode }> = ({ chi
     setIsLoading(true);
     try {
       const symbols = watchlist.map(item => item.symbol).join(',');
-      const apiUrl = import.meta.env.VITE_API_URL;
-      const response = await fetch(`${apiUrl}/api/alpha-quotes?symbols=${symbols}`);
+      const response = await fetch(
+        resolveApiPath(`/alpha-quotes?symbols=${encodeURIComponent(symbols)}`),
+      );
       
       if (response.ok) {
         const data = await response.json();

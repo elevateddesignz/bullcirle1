@@ -33,11 +33,6 @@ import TechnicalAnalysis from './pages/Learn/TechnicalAnalysis';
 import SearchBar from './components/SearchBar';
 import AutomationBot from './pages/AutomationBot';
 
-// Stripe imports for Checkout route
-import { Elements } from '@stripe/react-stripe-js';
-import stripePromise from './stripePromise';
-import CheckoutForm from './components/CheckoutForm';
-
 function AppContent() {
   const location = useLocation();
   const excludedPaths = ['/', '/login', '/register'];
@@ -78,15 +73,6 @@ function AppContent() {
           <Route path="/automation" element={<AutomationBot />} />
         </Route>
 
-        {/* Stripe Checkout route */}
-        <Route
-          path="/checkout"
-          element={
-            <Elements stripe={stripePromise}>
-              <CheckoutForm />
-            </Elements>
-          }
-        />
       </Routes>
     </>
   );

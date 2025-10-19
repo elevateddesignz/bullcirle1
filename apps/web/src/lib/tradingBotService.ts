@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
-import axios from 'axios';
-import { fetchMarketData, fetchQuote, fetchMarketMovers } from './alphaVantage';
+import { fetchMarketMovers } from './alphaVantage';
+import { resolveApiPath } from './backendConfig';
 
 /**
  * Gets a trading strategy recommendation from the backend API
@@ -9,8 +9,7 @@ import { fetchMarketData, fetchQuote, fetchMarketMovers } from './alphaVantage';
  */
 export async function getStrategyRecommendation(symbol: string) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await fetch(`${apiUrl}/api/tradingbot`, {
+    const response = await fetch(resolveApiPath('/tradingbot'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -50,7 +49,6 @@ export async function executeTrade(
   }
 ) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
     const payload: any = {
       symbol,
       side,
@@ -67,7 +65,7 @@ export async function executeTrade(
       payload.takeProfitPercent = options.takeProfitPercent;
     }
     
-    const response = await fetch(`${apiUrl}/api/tradingbot/autopilot`, {
+    const response = await fetch(resolveApiPath('/tradingbot/autopilot'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -94,10 +92,10 @@ export async function executeTrade(
  */
 export async function analyzeStock(symbol: string) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    
     // Get trading signal from backend
-    const response = await fetch(`${apiUrl}/api/tradingbot/signal?symbol=${symbol}`);
+    const response = await fetch(
+      resolveApiPath(`/tradingbot/signal?symbol=${encodeURIComponent(symbol)}`),
+    );
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -131,8 +129,7 @@ export async function analyzeStock(symbol: string) {
  */
 export async function getAccountInfo(mode: 'paper' | 'live' = 'paper') {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await fetch(`${apiUrl}/api/account?mode=${mode}`);
+    const response = await fetch(resolveApiPath(`/account?mode=${encodeURIComponent(mode)}`));
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -338,7 +335,9 @@ export async function scanStocksWithLowRSI(
       symbolsToScan.map(async (symbol) => {
         try {
           // Fetch historical data to calculate RSI
-          const historyResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/alpha-history?symbol=${symbol}`);
+          const historyResponse = await fetch(
+            resolveApiPath(`/alpha-history?symbol=${encodeURIComponent(symbol)}`),
+          );
           if (!historyResponse.ok) return null;
           const historyData = await historyResponse.json();
           
@@ -350,7 +349,9 @@ export async function scanStocksWithLowRSI(
           const rsi = calculateRSI(prices);
           
           // Fetch current quote
-          const quoteResponse = await fetch(`${import.meta.env.VITE_API_URL}/api/alpha-quotes?symbols=${symbol}`);
+          const quoteResponse = await fetch(
+            resolveApiPath(`/alpha-quotes?symbols=${encodeURIComponent(symbol)}`),
+          );
           if (!quoteResponse.ok) return null;
           const quoteData = await quoteResponse.json();
           const quote = quoteData.quotes[symbol];

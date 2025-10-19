@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { resolveApiPath } from './backendConfig';
 
 /**
  * Fetches historical market data for a symbol from Alpha Vantage
@@ -8,8 +9,9 @@ import axios from 'axios';
  */
 export async function fetchMarketData(symbol: string, interval: string = 'daily') {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await axios.get(`${apiUrl}/api/alpha-history?symbol=${symbol}`);
+    const response = await axios.get(
+      resolveApiPath(`/alpha-history?symbol=${encodeURIComponent(symbol)}`),
+    );
     
     if (response.data && response.data.history) {
       return response.data.history;
@@ -29,8 +31,9 @@ export async function fetchMarketData(symbol: string, interval: string = 'daily'
  */
 export async function fetchQuote(symbol: string) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await axios.get(`${apiUrl}/api/alpha-quotes?symbols=${symbol}`);
+    const response = await axios.get(
+      resolveApiPath(`/alpha-quotes?symbols=${encodeURIComponent(symbol)}`),
+    );
     
     if (response.data && response.data.quotes && response.data.quotes[symbol]) {
       return response.data.quotes[symbol];
@@ -50,8 +53,9 @@ export async function fetchQuote(symbol: string) {
  */
 export async function searchSymbols(query: string) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await axios.get(`${apiUrl}/api/alpha-search?query=${encodeURIComponent(query)}`);
+    const response = await axios.get(
+      resolveApiPath(`/alpha-search?query=${encodeURIComponent(query)}`),
+    );
     
     if (response.data && response.data.results) {
       return response.data.results;
@@ -71,15 +75,17 @@ export async function searchSymbols(query: string) {
  */
 export async function fetchMarketMovers(market: 'stocks' | 'crypto' = 'stocks') {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    
     // Try the new endpoint first, fallback to topplays if not available
     let response;
     try {
-      response = await axios.get(`${apiUrl}/api/tradingbot/plays?market=${market}&limit=10`);
+      response = await axios.get(
+        resolveApiPath(`/tradingbot/plays?market=${encodeURIComponent(market)}&limit=10`),
+      );
     } catch (error) {
       // Fallback to topplays endpoint
-      response = await axios.get(`${apiUrl}/api/tradingbot/topplays?market=${market}&limit=10`);
+      response = await axios.get(
+        resolveApiPath(`/tradingbot/topplays?market=${encodeURIComponent(market)}&limit=10`),
+      );
     }
     
     if (response.data) {
@@ -130,8 +136,7 @@ export async function fetchMarketMovers(market: 'stocks' | 'crypto' = 'stocks') 
  */
 export async function fetchMarketNews(symbols?: string[]) {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await axios.get(`${apiUrl}/api/alpha-news`);
+    const response = await axios.get(resolveApiPath('/alpha-news'));
     
     if (response.data && response.data.news) {
       let news = response.data.news;
@@ -162,8 +167,7 @@ export async function fetchMarketNews(symbols?: string[]) {
  */
 export async function fetchAllSymbols() {
   try {
-    const apiUrl = import.meta.env.VITE_API_URL || '';
-    const response = await axios.get(`${apiUrl}/api/tradingbot/symbols`);
+    const response = await axios.get(resolveApiPath('/tradingbot/symbols'));
     
     if (response.data && response.data.symbols) {
       return response.data.symbols;

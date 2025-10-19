@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface NewsArticle {
   title: string;
@@ -19,7 +20,7 @@ export default function Research() {
 
   const fetchNews = async () => {
     try {
-      const response = await fetch(`${import.meta.env.VITE_API_URL}/api/alpha-news`);
+      const response = await fetch(resolveApiPath('/alpha-news'));
       if (!response.ok) {
         throw new Error(`HTTP error ${response.status}`);
       }

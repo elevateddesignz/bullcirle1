@@ -1,21 +1,16 @@
 import React from 'react';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface ConnectAlpacaProps {
   mode: 'paper' | 'live';
   className?: string;
 }
 
-const apiBase = (import.meta.env.VITE_API_URL || '').replace(/\/$/, '');
-
 export function ConnectAlpaca({ mode, className }: ConnectAlpacaProps) {
   const label = mode === 'live' ? 'Live' : 'Paper';
 
   const handleClick = () => {
-    if (!apiBase) {
-      console.error('Missing VITE_API_URL environment variable for Alpaca OAuth redirect');
-      return;
-    }
-    window.location.href = `${apiBase}/api/v2/alpaca/oauth/start?mode=${mode}`;
+    window.location.href = resolveApiPath(`/v2/alpaca/oauth/start?mode=${mode}`);
   };
 
   return (

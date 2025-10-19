@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import ApexChart from 'react-apexcharts';
+import { resolveApiPath } from '../lib/backendConfig';
 
 interface Bar {
   t: string;
@@ -39,7 +40,9 @@ const LiveChart = ({ symbol }: { symbol: string }) => {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch(`${import.meta.env.VITE_API_URL}/api/chart-data?symbol=${symbol}&timeframe=1D&market=stocks`);
+      const res = await fetch(
+        resolveApiPath(`/chart-data?symbol=${encodeURIComponent(symbol)}&timeframe=1D&market=stocks`),
+      );
       const json = (await res.json()) as { bars?: Bar[] };
       const bars: Bar[] = Array.isArray(json.bars) ? json.bars : [];
 

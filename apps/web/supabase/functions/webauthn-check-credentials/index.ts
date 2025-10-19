@@ -1,92 +1,49 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  'Content-Type',
-  'Authorization',
-  'authorization',
-  'apikey',
-  'Apikey',
-  'x-client-info',
-  'X-Client-Info',
-  'x-supabase-api-version',
-];
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
-      headers: corsHeaders,
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ data: { error: 'Method not allowed' } }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
-    // Validate environment variables
-    const supabaseUrl = Deno.env.get('SUPABASE_URL');
-    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY');
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
 
     if (!supabaseUrl || !supabaseServiceKey) {
-      console.error('Missing environment variables:', {
-        hasUrl: !!supabaseUrl,
-        hasServiceKey: !!supabaseServiceKey
-      });
       return new Response(
-        JSON.stringify({ 
-          data: { error: 'Server configuration error' }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 500,
-        }
+        JSON.stringify({ data: { error: 'Server configuration error' } }),
+        { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    const body = await req.json().catch(() => ({}));
-    const { email } = body;
+    const { email } = await req.json().catch(() => ({}));
 
-    if (!email) {
+    if (typeof email !== 'string' || !email.trim()) {
       return new Response(
-        JSON.stringify({ 
-          data: { error: 'Missing email' }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 400,
-        }
+        JSON.stringify({ data: { error: 'Missing email' } }),
+        { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
       );
     }
 
-    // Initialize Supabase client
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
-
-    // Get user by email
     const { data: userData, error: userError } = await supabase.auth.admin.getUserByEmail(email);
-    
-    if (userError) {
-      console.error('Error fetching user:', userError);
-      return new Response(
-        JSON.stringify({ 
-          data: { hasCredentials: false }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        }
-      );
+
+    if (userError || !userData?.user) {
+      if (userError) console.error('Error fetching user:', userError);
+      return new Response(JSON.stringify({ data: { hasCredentials: false } }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    if (!userData?.user) {
-      return new Response(
-        JSON.stringify({ 
-          data: { hasCredentials: false }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        }
-      );
-    }
-
-    // Check if user has any credentials
     const { data: credentials, error: credentialsError } = await supabase
       .from('webauthn_credentials')
       .select('id')
@@ -95,39 +52,22 @@ const corsHeaders = {
 
     if (credentialsError) {
       console.error('Error checking credentials:', credentialsError);
-      return new Response(
-        JSON.stringify({ 
-          data: { hasCredentials: false }
-        }),
-        {
-          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-          status: 200,
-        }
-      );
+      return new Response(JSON.stringify({ data: { hasCredentials: false } }), {
+        status: 200,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
     return new Response(
-      JSON.stringify({ 
-        data: { hasCredentials: credentials && credentials.length > 0 }
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      }
+      JSON.stringify({ data: { hasCredentials: Boolean(credentials?.length) } }),
+      { status: 200, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   } catch (error) {
     console.error('Unexpected error in webauthn-check-credentials:', error);
+    const message = error instanceof Error ? error.message : String(error);
     return new Response(
-      JSON.stringify({ 
-        data: { 
-          error: 'Internal server error',
-          details: error instanceof Error ? error.message : String(error)
-        }
-      }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 500,
-      }
+      JSON.stringify({ data: { error: 'Internal server error', details: message } }),
+      { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } },
     );
   }
 });

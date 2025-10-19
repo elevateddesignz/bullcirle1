@@ -1,10 +1,5 @@
 import { supabase } from './api';
-
-const backendBaseUrl = import.meta.env.VITE_BACKEND_URL || import.meta.env.VITE_API_URL;
-
-if (!backendBaseUrl) {
-  throw new Error('Missing backend URL environment variable (VITE_BACKEND_URL or VITE_API_URL)');
-}
+import { createApiUrl } from './backendConfig';
 
 async function getAuthHeaders() {
   const {
@@ -27,7 +22,7 @@ export async function fetchBars(
   end: Date = new Date(),
   limit = 1000,
 ) {
-  const url = new URL(`${backendBaseUrl}/api/v2/alpaca/market-data/bars`);
+  const url = createApiUrl('/v2/alpaca/market-data/bars');
   url.searchParams.set('symbol', symbol.toUpperCase());
   url.searchParams.set('timeframe', timeframe);
   url.searchParams.set('start', start.toISOString());

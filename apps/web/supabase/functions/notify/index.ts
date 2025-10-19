@@ -1,78 +1,64 @@
 import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  'Content-Type',
-  'Authorization',
-  'authorization',
-  'apikey',
-  'Apikey',
-  'x-client-info',
-  'X-Client-Info',
-  'x-supabase-api-version',
-];
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
 
-const corsHeaders = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'POST, OPTIONS',
-  'Access-Control-Allow-Headers': allowedHeaders.join(', '),
-      status: 204,
-      headers: corsHeaders,
+  if (req.method !== 'POST') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
-    if (req.method !== 'POST') {
-      throw new Error('Method not allowed');
-    }
+    const { email } = await req.json().catch(() => ({}));
 
-    const { email } = await req.json();
-
-    if (!email) {
-      throw new Error('Email is required');
-    }
-
-    // Initialize Supabase client
-    const supabaseClient = createClient(
-      Deno.env.get('SUPABASE_URL') ?? '',
-      Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? ''
-    );
-
-    // Store email in the database
-    const { error: dbError } = await supabaseClient
-      .from('waitlist')
-      .insert([{ email }]);
-
-    if (dbError) {
-      throw dbError;
-    }
-
-    // Send notification email using Supabase's built-in SMTP
-    const { error: emailError } = await supabaseClient
-      .from('emails')
-      .insert([{
-        to: 'contact@bullcircle.com',
-        subject: 'New Waitlist Signup',
-        content: `New signup from: ${email}`,
-      }]);
-
-    if (emailError) {
-      throw emailError;
-    }
-
-    return new Response(
-      JSON.stringify({ message: 'Successfully added to waitlist' }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-        status: 200,
-      }
-    );
-  } catch (error) {
-    return new Response(
-      JSON.stringify({ error: error instanceof Error ? error.message : String(error) }),
-      {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    if (typeof email !== 'string' || !email.trim()) {
+      return new Response(JSON.stringify({ error: 'Email is required' }), {
         status: 400,
-      }
-    );
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
+    }
+
+    const supabaseUrl = Deno.env.get('SUPABASE_URL') ?? '';
+    const supabaseServiceKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
+
+    if (!supabaseUrl || !supabaseServiceKey) {
+      return new Response(
+        JSON.stringify({ error: 'Supabase service credentials are not configured.' }),
+        {
+          status: 500,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+        },
+      );
+    }
+
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+
+    const { error: dbError } = await supabase.from('waitlist').insert([{ email }]);
+    if (dbError) throw dbError;
+
+    const { error: emailError } = await supabase.from('emails').insert([{
+      to: 'contact@bullcircle.com',
+      subject: 'New Waitlist Signup',
+      content: `New signup from: ${email}`,
+    }]);
+
+    if (emailError) throw emailError;
+
+    return new Response(JSON.stringify({ success: true }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
+  } catch (error) {
+    console.error('Error in notify function:', error);
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });

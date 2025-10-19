@@ -1,125 +1,104 @@
-import { createClient } from 'npm:@supabase/supabase-js@2.39.7';
+import { buildCorsHeaders, handleCorsPreflight } from '../_shared/cors.ts';
 
-const allowedHeaders = [
-  "Content-Type",
-  "Authorization",
-  "authorization",
-  "apikey",
-  "Apikey",
-  "x-client-info",
-  "X-Client-Info",
-  "x-supabase-api-version",
-];
+const TIME_SERIES_FUNCTIONS = {
+  daily: 'TIME_SERIES_DAILY',
+  weekly: 'TIME_SERIES_WEEKLY',
+  monthly: 'TIME_SERIES_MONTHLY',
+  intraday: 'TIME_SERIES_INTRADAY',
+} as const;
 
-const corsHeaders = {
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-  "Access-Control-Allow-Headers": allowedHeaders.join(", "),
-      headers: corsHeaders,
+const TIME_SERIES_KEYS = {
+  daily: 'Time Series (Daily)',
+  weekly: 'Weekly Time Series',
+  monthly: 'Monthly Time Series',
+  intraday: 'Time Series (5min)',
+} as const;
+
+type Interval = keyof typeof TIME_SERIES_FUNCTIONS;
+
+Deno.serve(async (req) => {
+  const corsHeaders = buildCorsHeaders(req);
+  const preflight = handleCorsPreflight(req, corsHeaders);
+  if (preflight) return preflight;
+
+  if (req.method !== 'GET') {
+    return new Response(JSON.stringify({ error: 'Method not allowed' }), {
+      status: 405,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 
   try {
     const url = new URL(req.url);
     const symbol = url.searchParams.get('symbol');
-    const interval = url.searchParams.get('interval') || 'daily';
+    const interval = (url.searchParams.get('interval') ?? 'daily') as Interval;
 
     if (!symbol) {
-      return new Response(
-        JSON.stringify({ error: "Symbol parameter is required" }),
-        {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          status: 400,
-        }
-      );
+      return new Response(JSON.stringify({ error: 'Symbol parameter is required' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Get Alpha Vantage API key from environment
-    const apiKey = Deno.env.get("ALPHA_VANTAGE_API_KEY");
+    const intervalKey = TIME_SERIES_FUNCTIONS[interval] ? interval : 'daily';
+    const apiKey = Deno.env.get('ALPHA_VANTAGE_API_KEY');
+
     if (!apiKey) {
-      return new Response(
-        JSON.stringify({ error: "Alpha Vantage API key not configured" }),
-        {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          status: 500,
-        }
-      );
+      return new Response(JSON.stringify({ error: 'Alpha Vantage API key not configured' }), {
+        status: 500,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Determine the function to call based on interval
-    let timeSeriesFunction = 'TIME_SERIES_DAILY';
-    if (interval === 'weekly') {
-      timeSeriesFunction = 'TIME_SERIES_WEEKLY';
-    } else if (interval === 'monthly') {
-      timeSeriesFunction = 'TIME_SERIES_MONTHLY';
-    } else if (interval === 'intraday') {
-      timeSeriesFunction = 'TIME_SERIES_INTRADAY';
+    const params = new URLSearchParams({
+      function: TIME_SERIES_FUNCTIONS[intervalKey],
+      symbol,
+      apikey: apiKey,
+    });
+
+    if (intervalKey === 'intraday') {
+      params.set('interval', '5min');
+      params.set('outputsize', 'compact');
     }
 
-    // Build Alpha Vantage API URL
-    let alphaVantageUrl = `https://www.alphavantage.co/query?function=${timeSeriesFunction}&symbol=${symbol}&apikey=${apiKey}`;
-    
-    // Add additional parameters for intraday
-    if (interval === 'intraday') {
-      alphaVantageUrl += '&interval=5min&outputsize=compact';
-    }
+    const response = await fetch(`https://www.alphavantage.co/query?${params.toString()}`);
 
-    // Fetch data from Alpha Vantage
-    const response = await fetch(alphaVantageUrl);
     if (!response.ok) {
       throw new Error(`Alpha Vantage API error: ${response.status}`);
     }
 
     const data = await response.json();
+    const timeSeriesKey = TIME_SERIES_KEYS[intervalKey];
+    const timeSeries = data[timeSeriesKey] as Record<string, Record<string, string>> | undefined;
 
-    // Extract and format the time series data
-    let timeSeriesKey = '';
-    if (interval === 'daily') {
-      timeSeriesKey = 'Time Series (Daily)';
-    } else if (interval === 'weekly') {
-      timeSeriesKey = 'Weekly Time Series';
-    } else if (interval === 'monthly') {
-      timeSeriesKey = 'Monthly Time Series';
-    } else if (interval === 'intraday') {
-      timeSeriesKey = 'Time Series (5min)';
-    }
-
-    const timeSeries = data[timeSeriesKey];
     if (!timeSeries) {
-      return new Response(
-        JSON.stringify({ error: "No data available for this symbol" }),
-        {
-          headers: { 'Content-Type': 'application/json', ...corsHeaders },
-          status: 404,
-        }
-      );
+      return new Response(JSON.stringify({ error: 'No data available for this symbol' }), {
+        status: 404,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+      });
     }
 
-    // Convert time series to array format
-    const formattedData = Object.entries(timeSeries).map(([date, values]: [string, any]) => ({
-      date,
-      open: parseFloat(values['1. open']),
-      high: parseFloat(values['2. high']),
-      low: parseFloat(values['3. low']),
-      close: parseFloat(values['4. close']),
-      volume: parseInt(values['5. volume'] || '0', 10)
-    })).sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const formattedData = Object.entries(timeSeries)
+      .map(([date, values]) => ({
+        date,
+        open: Number.parseFloat(values['1. open'] ?? '0'),
+        high: Number.parseFloat(values['2. high'] ?? '0'),
+        low: Number.parseFloat(values['3. low'] ?? '0'),
+        close: Number.parseFloat(values['4. close'] ?? '0'),
+        volume: Number.parseInt(values['5. volume'] ?? '0', 10),
+      }))
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    return new Response(
-      JSON.stringify({ symbol, interval, data: formattedData }),
-      {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        status: 200,
-      }
-    );
+    return new Response(JSON.stringify({ symbol, interval: intervalKey, data: formattedData }), {
+      status: 200,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   } catch (error) {
-    console.error("Error in market-data function:", error);
-    return new Response(
-      JSON.stringify({ error: error.message || "Internal server error" }),
-      {
-        headers: { 'Content-Type': 'application/json', ...corsHeaders },
-        status: 500,
-      }
-    );
+    console.error('Error in market-data function:', error);
+    const message = error instanceof Error ? error.message : 'Internal server error';
+    return new Response(JSON.stringify({ error: message }), {
+      status: 500,
+      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
+    });
   }
 });
