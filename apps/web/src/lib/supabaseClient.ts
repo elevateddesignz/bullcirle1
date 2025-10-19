@@ -1,4 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
+import { resolveBackendPath } from './backendConfig';
 
 const FALLBACK_SUPABASE_URL = 'http://localhost:54321';
 const FALLBACK_SUPABASE_ANON_KEY = 'public-anon-key';
@@ -20,4 +21,40 @@ if (isPlaceholder(rawSupabaseUrl) || !rawSupabaseAnonKey) {
   );
 }
 
-export const supabase = createClient(supabaseUrl, supabaseAnonKey);
+const shouldProxySupabase =
+  Boolean(import.meta.env.DEV && !isPlaceholder(rawSupabaseUrl));
+
+const supabaseProxyBase = resolveBackendPath('/supabase');
+
+const proxiedFetch: typeof fetch = async (input, init) => {
+  if (!shouldProxySupabase || !rawSupabaseUrl) {
+    return fetch(input as any, init);
+  }
+
+  const rewriteUrl = (url: string) =>
+    url.startsWith(rawSupabaseUrl) ? url.replace(rawSupabaseUrl, supabaseProxyBase) : url;
+
+  if (typeof input === 'string') {
+    return fetch(rewriteUrl(input), init);
+  }
+
+  if (input instanceof URL) {
+    return fetch(rewriteUrl(input.toString()), init);
+  }
+
+  if (input instanceof Request) {
+    const rewrittenUrl = rewriteUrl(input.url);
+    if (rewrittenUrl !== input.url) {
+      const proxiedRequest = new Request(rewrittenUrl, input);
+      return fetch(proxiedRequest, init);
+    }
+  }
+
+  return fetch(input as any, init);
+};
+
+export const supabase = createClient(supabaseUrl, supabaseAnonKey, shouldProxySupabase ? {
+  global: {
+    fetch: proxiedFetch,
+  },
+} : undefined);

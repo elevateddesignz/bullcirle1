@@ -13,6 +13,7 @@ import tradingbotRouter from './routes/tradingbot.js';
 import alpacaWebhookRouter from './routes/alpaca-webhook.js';
 import { marketRouter } from './routes/market.js';
 import { alpacaOAuthRouter } from './routes/alpaca-oauth.js';
+import supabaseProxyRouter from './routes/supabase-proxy.js';
 
 type Mode = 'development' | 'production' | 'test';
 
@@ -79,6 +80,7 @@ app.use('/api', alpacaOAuthRouter);
 app.use('/api', marketRouter);
 app.use('/api/tradingbot', tradingbotRouter);
 app.use('/api/alpaca', alpacaWebhookRouter);
+app.use('/supabase', supabaseProxyRouter);
 
 const port = Number(process.env.PORT || 3000);
 const mode = (process.env.NODE_ENV || 'development') as Mode;
