@@ -12,6 +12,7 @@ import { ThemeProvider } from './contexts/ThemeContext';
 import { SearchProvider } from './contexts/SearchContext';
 import { EnvModeProvider } from './contexts/EnvModeContext';
 import { WatchlistProvider } from './contexts/WatchlistContext';
+import { AutoBotProvider } from './contexts/AutoBotContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import Landing from './pages/Landing';
@@ -91,26 +92,28 @@ export default function App() {
       <ThemeProvider>
         <EnvModeProvider>
           <AuthProvider>
-            <WatchlistProvider>
-              <SearchProvider>
-                <Toaster
-                  position="top-right"
-                  toastOptions={{
-                    duration: 4000,
-                    className:
-                      'dark:bg-gray-800 dark:text-white light:bg-white light:text-gray-800',
-                    style: { border: '1px solid rgba(0, 255, 255, 0.2)' },
-                    success: {
-                      iconTheme: { primary: '#00FFFF', secondary: 'var(--toast-bg)' },
-                    },
-                    error: {
-                      iconTheme: { primary: '#EF4444', secondary: 'var(--toast-bg)' },
-                    },
-                  }}
-                />
-                <AppContent />
-              </SearchProvider>
-            </WatchlistProvider>
+            <AutoBotProvider>
+              <WatchlistProvider>
+                <SearchProvider>
+                  <Toaster
+                    position="top-right"
+                    toastOptions={{
+                      duration: 4000,
+                      className:
+                        'dark:bg-gray-800 dark:text-white light:bg-white light:text-gray-800',
+                      style: { border: '1px solid rgba(0, 255, 255, 0.2)' },
+                      success: {
+                        iconTheme: { primary: '#00FFFF', secondary: 'var(--toast-bg)' },
+                      },
+                      error: {
+                        iconTheme: { primary: '#EF4444', secondary: 'var(--toast-bg)' },
+                      },
+                    }}
+                  />
+                  <AppContent />
+                </SearchProvider>
+              </WatchlistProvider>
+            </AutoBotProvider>
           </AuthProvider>
         </EnvModeProvider>
       </ThemeProvider>

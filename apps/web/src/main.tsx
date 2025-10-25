@@ -2,7 +2,6 @@ import React, { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HelmetProvider } from 'react-helmet-async';
 import App from './App.tsx';
-import { AutoBotProvider } from './contexts/AutoBotContext';
 import './index.css';
 
 // Add error boundary for debugging
@@ -45,9 +44,7 @@ root.render(
   <StrictMode>
     <ErrorBoundary>
       <HelmetProvider>
-        <AutoBotProvider>
-          <App />
-        </AutoBotProvider>
+        <App />
       </HelmetProvider>
     </ErrorBoundary>
   </StrictMode>
