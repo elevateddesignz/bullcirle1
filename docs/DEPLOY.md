@@ -13,7 +13,8 @@ Populate the following variables in the host environment or respective `.env` fi
 ### API (`apps/api` TypeScript service)
 - `PORT`, `NODE_ENV`, `CORS_ORIGIN` – Express bootstrap and origin allow list.【F:apps/api/src/server.ts†L19-L57】
 - `DATABASE_URL` – Prisma datasource for the Postgres instance.【F:apps/api/prisma/schema.prisma†L1-L33】
-- `SUPABASE_JWT_SECRET` – Required for JWT validation via `attachAuthContext`.【F:apps/api/src/middleware/auth-context.ts†L1-L116】
+- `SUPABASE_JWT_SECRET` – Required for JWT validation via `attachAuthContext`.【F:apps/api/src/middleware/auth-context.ts†L1-L180】
+- `SUPABASE_URL`, `SUPABASE_ANON_KEY` – Provide the Supabase introspection fallback and power the `/supabase/*` proxy for browsers behind firewalls.【F:apps/api/src/middleware/auth-context.ts†L1-L180】【F:apps/api/src/routes/supabase-proxy.ts†L1-L112】
 - Alpaca OAuth credentials: `ALPACA_PAPER_CLIENT_ID`, `ALPACA_PAPER_CLIENT_SECRET`, `ALPACA_PAPER_REDIRECT_URI`, and live equivalents.【F:apps/api/src/routes/alpaca-oauth.ts†L1-L214】
 - `ALPACA_WEBHOOK_SECRET` – HMAC signature shared with Alpaca for `/api/alpaca/webhook`.【F:apps/api/src/routes/alpaca-webhook.ts†L1-L39】
 - `ALPHA_VANTAGE_API_KEY` – Alpha Vantage market data proxied via `/api/market/*`.【F:apps/api/src/services/marketData.ts†L1-L222】【F:apps/api/src/routes/market.ts†L1-L218】

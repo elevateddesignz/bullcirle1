@@ -4,6 +4,8 @@ import { logger } from '../lib/logger.js';
 import type { Role } from './require-role.js';
 
 const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
+const SUPABASE_URL = process.env.SUPABASE_URL;
+const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
 type MaybeArray<T> = T | T[] | undefined;
 
@@ -58,32 +60,76 @@ function isTradingRequest(req: Request): boolean {
   return TRADING_PREFIXES.some(prefix => url.startsWith(prefix));
 }
 
-export function attachAuthContext(req: Request, res: Response, next: NextFunction) {
-  req.envMode = resolveEnvMode(req);
-
-  const header = req.headers.authorization;
-  if (!header?.startsWith('Bearer ')) {
-    if (isTradingRequest(req)) {
-      return res.status(401).json({ error: 'authentication required' });
-    }
-    return next();
+async function fetchSupabaseUser(token: string) {
+  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+    return null;
   }
-
-  if (!SUPABASE_JWT_SECRET) {
-    logger.error('SUPABASE_JWT_SECRET not configured; rejecting authenticated request');
-    return res.status(500).json({ error: 'authentication misconfigured' });
-  }
-
-  const token = header.slice(7);
 
   try {
-    const payload = jwt.verify(token, SUPABASE_JWT_SECRET) as jwt.JwtPayload & {
-      sub?: string;
-      email?: string;
-    };
-    const userId = payload.sub;
+    const target = new URL('/auth/v1/user', SUPABASE_URL);
+    const response = await fetch(target, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        apikey: SUPABASE_ANON_KEY,
+      },
+    });
+
+    if (!response.ok) {
+      logger.warn({ status: response.status }, 'Supabase user lookup failed');
+      return null;
+    }
+
+    const body = await response.json();
+    if (body?.user) {
+      return body.user;
+    }
+    return body;
+  } catch (error) {
+    logger.error({ err: error }, 'Supabase remote verification failed');
+    return null;
+  }
+}
+
+function extractUserId(payload: any): string | undefined {
+  return payload?.sub ?? payload?.id ?? payload?.user?.id;
+}
+
+function extractEmail(payload: any): string | undefined {
+  return payload?.email ?? payload?.user?.email;
+}
+
+export async function attachAuthContext(req: Request, res: Response, next: NextFunction) {
+  req.envMode = resolveEnvMode(req);
+
+  try {
+    const header = req.headers.authorization;
+    if (!header?.startsWith('Bearer ')) {
+      if (isTradingRequest(req)) {
+        return res.status(401).json({ error: 'authentication required' });
+      }
+      return next();
+    }
+
+    const token = header.slice(7);
+
+    let payload: any | null = null;
+
+    if (SUPABASE_JWT_SECRET) {
+      try {
+        payload = jwt.verify(token, SUPABASE_JWT_SECRET);
+      } catch (error) {
+        logger.warn({ err: error }, 'Failed to verify JWT token locally');
+      }
+    } else {
+      logger.warn('SUPABASE_JWT_SECRET not configured; falling back to Supabase introspection');
+    }
+
+    if (!payload) {
+      payload = await fetchSupabaseUser(token);
+    }
+
+    const userId = extractUserId(payload);
     if (!userId) {
-      logger.warn('JWT payload missing subject');
       if (isTradingRequest(req)) {
         return res.status(401).json({ error: 'invalid token' });
       }
@@ -91,9 +137,10 @@ export function attachAuthContext(req: Request, res: Response, next: NextFunctio
     }
 
     const roles = extractRoles(payload);
+    const email = extractEmail(payload);
     const auth = {
       userId,
-      email: payload.email,
+      email,
       roles,
       isEmailVerified: extractVerification(payload),
       env: req.envMode,
@@ -102,15 +149,13 @@ export function attachAuthContext(req: Request, res: Response, next: NextFunctio
     req.auth = auth;
     req.user = {
       id: userId,
-      email: payload.email,
+      email,
       roles,
     };
-  } catch (error) {
-    logger.warn({ err: error }, 'Failed to verify JWT token');
-    if (isTradingRequest(req)) {
-      return res.status(401).json({ error: 'invalid token' });
-    }
-  }
 
-  next();
+    return next();
+  } catch (error) {
+    logger.error({ err: error }, 'attachAuthContext failed');
+    return next(error);
+  }
 }
