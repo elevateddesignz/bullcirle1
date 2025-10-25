@@ -7,6 +7,7 @@ import React, {
   useState,
 } from 'react';
 import { useEnvMode } from './EnvModeContext';
+import { useAuth } from './AuthContext';
 import { analyzeStock, executeTrade, runTradingBot, findBestStrategy } from '../lib/tradingBotService';
 import { marketFetch } from '../lib/api';
 
@@ -41,6 +42,7 @@ export const useAutoBot = () => {
 export function AutoBotProvider({ children }: { children: React.ReactNode }) {
   const { envMode } = useEnvMode();           // trading env: "paper" or "live"
   const modeParam   = envMode.toLowerCase();  // lowercase for trading API calls
+  const { user } = useAuth();
 
   const [running, setRunning]         = useState(false);
   const [interval, setIntervalMin]    = useState(30);
@@ -68,17 +70,20 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
 
   // Fetch & return the latest equity
   const fetchEquity = useCallback(async (): Promise<number> => {
+    if (!user) {
+      throw new Error('Not authenticated');
+    }
     const res = await marketFetch(`/account?mode=${modeParam}`);
     if (!res.ok) throw new Error(`Equity HTTP ${res.status}`);
     const { account } = await res.json();
     const eq = parseFloat(account.equity);
     setEquity(eq);
     return eq;
-  }, [modeParam]);
+  }, [modeParam, user]);
 
   // One bot cycle
   const tick = useCallback(async () => {
-    if (!runningRef.current) return;
+    if (!runningRef.current || !user) return;
     const { targetProfit, stopLossPct, takeProfitPct } = optsRef.current;
 
     try {
@@ -169,7 +174,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [modeParam, fetchEquity]);
+  }, [modeParam, fetchEquity, user]);
 
   const start = (opts: StartOpts) => {
     if (runningRef.current) return;
@@ -201,19 +206,23 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
 
   // react to PAPER/LIVE toggle
   useEffect(() => {
-    fetchEquity();
+    if (user) {
+      fetchEquity();
+    }
     if (runningRef.current) {
       if (timerRef.current) clearInterval(timerRef.current);
       addLog(`↻ mode → ${envMode.toUpperCase()}`);
       tick();
       timerRef.current = setInterval(tick, interval * 60_000);
     }
-  }, [envMode, fetchEquity, tick, interval]);
+  }, [envMode, fetchEquity, tick, interval, user]);
 
   // initial equity load
   useEffect(() => {
-    fetchEquity();
-  }, [fetchEquity]);
+    if (user) {
+      fetchEquity();
+    }
+  }, [fetchEquity, user]);
 
   // cleanup on unmount
   useEffect(() => () => stop(), []);

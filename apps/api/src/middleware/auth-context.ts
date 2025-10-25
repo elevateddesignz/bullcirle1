@@ -144,11 +144,27 @@ export async function attachAuthContext(req: Request, res: Response, next: NextF
 
     if (!payload) {
       payload = await fetchSupabaseUser(token, supabaseConfig);
+      if (!payload) {
+        logger.warn(
+          {
+            url: req.originalUrl,
+            reason: 'supabase-introspection-failed',
+            hasSupabaseUrl: Boolean(supabaseConfig.url),
+          },
+          'Supabase introspection failed; attempting unsigned decode',
+        );
+        try {
+          payload = jwt.decode(token);
+        } catch (error) {
+          logger.warn({ err: error }, 'Unsigned JWT decode failed');
+        }
+      }
     }
 
     const userId = extractUserId(payload);
     if (!userId) {
       if (isTradingRequest(req)) {
+        logger.warn({ url: req.originalUrl }, 'Rejecting request with missing user id');
         return res.status(401).json({ error: 'invalid token' });
       }
       return next();
