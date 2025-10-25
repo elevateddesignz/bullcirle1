@@ -23,7 +23,7 @@ Populate the following variables in the host environment or respective `.env` fi
 ### Web (`apps/web` Vite dashboard)
 - `VITE_SUPABASE_URL`, `VITE_SUPABASE_ANON_KEY` – Supabase auth client.【F:apps/web/src/lib/api.ts†L5-L12】
 - `VITE_API_URL` (or `VITE_BACKEND_URL`) – REST base URL consumed by `lib/api.ts` and Alpaca helpers.【F:apps/web/src/lib/api.ts†L96-L123】【F:apps/web/src/lib/alpaca.ts†L1-L63】
-- `VITE_PROXY_SUPABASE` – Optional (`true`/`false`) flag; keep `false` when pointing at a remote API host to avoid proxy-induced 502s, enable only when the backend and Supabase proxy run locally.【F:apps/web/src/lib/supabaseClient.ts†L1-L88】
+- `VITE_PROXY_SUPABASE` – Optional (`true`/`false`) flag; set `true` when the browser cannot reach Supabase directly (DNS-blocked dev boxes, corporate firewalls) so requests flow through the API proxy; leave `false` when direct access works to avoid unnecessary hops.【F:apps/web/src/lib/supabaseClient.ts†L1-L132】【F:apps/api/src/routes/supabase-proxy.ts†L1-L94】
 - `VITE_STRIPE_PUBLISHABLE_KEY` – Stripe Elements initialization.【F:apps/web/src/stripePromise.js†L1-L12】
 
 ## Local development

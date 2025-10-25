@@ -3,25 +3,37 @@ import { logger } from '../lib/logger.js';
 
 const router = express.Router();
 
-const SUPABASE_URL = process.env.SUPABASE_URL;
-const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const ENV_SUPABASE_URL = process.env.SUPABASE_URL;
+const ENV_SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
 
-if (!SUPABASE_URL) {
-  logger.warn('Supabase proxy disabled: SUPABASE_URL is not configured.');
+const HEADER_SUPABASE_URL = 'x-supabase-url';
+const HEADER_SUPABASE_KEY = 'x-supabase-key';
+
+if (!ENV_SUPABASE_URL) {
+  logger.warn('Supabase proxy falling back to per-request headers: SUPABASE_URL is not configured.');
 }
 
 router.use(async (req, res) => {
-  if (!SUPABASE_URL) {
+  const headerUrl = req.headers[HEADER_SUPABASE_URL] as string | string[] | undefined;
+  const headerKey = req.headers[HEADER_SUPABASE_KEY] as string | string[] | undefined;
+
+  const supabaseUrl = Array.isArray(headerUrl) ? headerUrl[0] : headerUrl || ENV_SUPABASE_URL;
+  const supabaseAnonKey = Array.isArray(headerKey) ? headerKey[0] : headerKey || ENV_SUPABASE_ANON_KEY;
+
+  if (!supabaseUrl) {
     return res.status(503).json({ error: 'Supabase proxy is not configured.' });
   }
 
   try {
     const suffix = req.originalUrl.slice(req.baseUrl.length) || '/';
-    const targetUrl = new URL(suffix, SUPABASE_URL).toString();
+    const targetUrl = new URL(suffix, supabaseUrl).toString();
 
     const headers = new Headers();
     Object.entries(req.headers).forEach(([key, value]) => {
-      if (value === undefined || key.toLowerCase() === 'host') return;
+      const lowerKey = key.toLowerCase();
+      if (value === undefined || lowerKey === 'host' || lowerKey === HEADER_SUPABASE_URL || lowerKey === HEADER_SUPABASE_KEY) {
+        return;
+      }
       if (Array.isArray(value)) {
         headers.set(key, value.join(','));
       } else {
@@ -30,10 +42,10 @@ router.use(async (req, res) => {
     });
 
     headers.delete('content-length');
-    headers.set('origin', new URL(SUPABASE_URL).origin);
+    headers.set('origin', new URL(supabaseUrl).origin);
 
-    if (SUPABASE_ANON_KEY && !headers.has('apikey')) {
-      headers.set('apikey', SUPABASE_ANON_KEY);
+    if (supabaseAnonKey && !headers.has('apikey')) {
+      headers.set('apikey', supabaseAnonKey);
     }
 
     let body: any;

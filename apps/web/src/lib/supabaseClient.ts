@@ -36,12 +36,20 @@ const backendLooksLocal =
   || backendBaseUrl.startsWith('http://0.0.0.0');
 
 const shouldProxySupabase = Boolean(
-  import.meta.env.DEV
-  && !isPlaceholder(rawSupabaseUrl)
-  && (proxyPreference ?? backendLooksLocal)
+  !isPlaceholder(rawSupabaseUrl)
+  && (proxyPreference ?? (import.meta.env.DEV && backendLooksLocal))
 );
 
 const supabaseProxyBase = resolveBackendPath('/supabase');
+
+function mergeHeaders(...sources: (HeadersInit | undefined)[]) {
+  const headers = new Headers();
+  for (const source of sources) {
+    if (!source) continue;
+    new Headers(source).forEach((value, key) => headers.set(key, value));
+  }
+  return headers;
+}
 
 const proxiedFetch: typeof fetch = async (input, init) => {
   if (!shouldProxySupabase || !rawSupabaseUrl) {
@@ -50,24 +58,56 @@ const proxiedFetch: typeof fetch = async (input, init) => {
 
   const rewriteUrl = (url: string) =>
     url.startsWith(rawSupabaseUrl) ? url.replace(rawSupabaseUrl, supabaseProxyBase) : url;
+  const applyHeaders = (existing?: HeadersInit) => {
+    const headers = mergeHeaders(existing);
+    headers.set('x-supabase-url', rawSupabaseUrl);
+    if (supabaseAnonKey) {
+      headers.set('x-supabase-key', supabaseAnonKey);
+    }
+    return headers;
+  };
 
   if (typeof input === 'string') {
-    return fetch(rewriteUrl(input), init);
+    return fetch(rewriteUrl(input), {
+      ...init,
+      headers: applyHeaders(init?.headers),
+    });
   }
 
   if (input instanceof URL) {
-    return fetch(rewriteUrl(input.toString()), init);
+    return fetch(rewriteUrl(input.toString()), {
+      ...init,
+      headers: applyHeaders(init?.headers),
+    });
   }
 
   if (input instanceof Request) {
-    const rewrittenUrl = rewriteUrl(input.url);
-    if (rewrittenUrl !== input.url) {
-      const proxiedRequest = new Request(rewrittenUrl, input);
-      return fetch(proxiedRequest, init);
+    const cloned = input.clone();
+    let body: BodyInit | null | undefined;
+    if (!(input.method === 'GET' || input.method === 'HEAD')) {
+      body = await cloned.blob();
     }
+    const proxiedRequest = new Request(rewriteUrl(input.url), {
+      method: input.method,
+      headers: applyHeaders(input.headers),
+      body: body ?? undefined,
+      cache: input.cache,
+      credentials: input.credentials,
+      integrity: input.integrity,
+      keepalive: input.keepalive,
+      mode: input.mode,
+      redirect: input.redirect,
+      referrer: input.referrer,
+      referrerPolicy: input.referrerPolicy,
+      signal: input.signal,
+    } as RequestInit);
+    return fetch(proxiedRequest, init);
   }
 
-  return fetch(input as any, init);
+  return fetch(input as any, {
+    ...init,
+    headers: applyHeaders(init?.headers),
+  });
 };
 
 export const supabase = createClient(supabaseUrl, supabaseAnonKey, shouldProxySupabase ? {
