@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import { resolveBackendPath } from './backendConfig';
+import { resolveBackendPath, backendBaseUrl } from './backendConfig';
 
 const FALLBACK_SUPABASE_URL = 'http://localhost:54321';
 const FALLBACK_SUPABASE_ANON_KEY = 'public-anon-key';
@@ -21,8 +21,25 @@ if (isPlaceholder(rawSupabaseUrl) || !rawSupabaseAnonKey) {
   );
 }
 
-const shouldProxySupabase =
-  Boolean(import.meta.env.DEV && !isPlaceholder(rawSupabaseUrl));
+const proxyFlagRaw = (import.meta.env.VITE_PROXY_SUPABASE ?? '').toString().trim().toLowerCase();
+const proxyPreference =
+  proxyFlagRaw === 'true' || proxyFlagRaw === '1'
+    ? true
+    : proxyFlagRaw === 'false' || proxyFlagRaw === '0'
+      ? false
+      : undefined;
+
+const backendLooksLocal =
+  !backendBaseUrl
+  || backendBaseUrl.includes('localhost')
+  || backendBaseUrl.startsWith('http://127.')
+  || backendBaseUrl.startsWith('http://0.0.0.0');
+
+const shouldProxySupabase = Boolean(
+  import.meta.env.DEV
+  && !isPlaceholder(rawSupabaseUrl)
+  && (proxyPreference ?? backendLooksLocal)
+);
 
 const supabaseProxyBase = resolveBackendPath('/supabase');
 

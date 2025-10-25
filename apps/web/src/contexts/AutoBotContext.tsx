@@ -9,6 +9,7 @@ import React, {
 import { useEnvMode } from './EnvModeContext';
 import { analyzeStock, executeTrade, runTradingBot, findBestStrategy } from '../lib/tradingBotService';
 import { resolveApiPath } from '../lib/backendConfig';
+import { supabase } from '../lib/supabaseClient';
 
 export interface StartOpts {
   targetProfit: number;
@@ -66,28 +67,36 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
       return next.length > 300 ? next.slice(-300) : next;
     });
 
-  // include Bearer token like Dashboard
-  const getHeaders = () => {
-    const token = localStorage.getItem('token');
-    return token
-      ? { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
-      : { 'Content-Type': 'application/json' };
-  };
+  // Resolve Supabase session token to include in backend calls
+  const getHeaders = useCallback(async () => {
+    const baseHeaders = { 'Content-Type': 'application/json' };
+    try {
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+      const token = session?.access_token;
+      return token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
+    } catch (authError) {
+      console.warn('[AutoBot] Failed to read Supabase session for auth header', authError);
+      return baseHeaders;
+    }
+  }, []);
 
   // Fetch & return the latest equity
   const fetchEquity = useCallback(async (): Promise<number> => {
-    const res = await fetch(resolveApiPath(`/account?mode=${modeParam}`), { headers: getHeaders() });
+    const headers = await getHeaders();
+    const res = await fetch(resolveApiPath(`/account?mode=${modeParam}`), { headers });
     if (!res.ok) throw new Error(`Equity HTTP ${res.status}`);
     const { account } = await res.json();
     const eq = parseFloat(account.equity);
     setEquity(eq);
     return eq;
-  }, [modeParam]);
+  }, [modeParam, getHeaders]);
 
   // One bot cycle
   const tick = useCallback(async () => {
     if (!runningRef.current) return;
-    const hdr = getHeaders();
+    const hdr = await getHeaders();
     const { targetProfit, stopLossPct, takeProfitPct } = optsRef.current;
 
     try {
@@ -178,7 +187,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [modeParam, fetchEquity]);
+  }, [modeParam, fetchEquity, getHeaders]);
 
   const start = (opts: StartOpts) => {
     if (runningRef.current) return;
