@@ -1,6 +1,6 @@
 import { supabase } from './supabaseClient';
 import { fetchMarketMovers } from './alphaVantage';
-import { resolveApiPath } from './backendConfig';
+import { marketFetch } from './api';
 
 /**
  * Gets a trading strategy recommendation from the backend API
@@ -9,7 +9,7 @@ import { resolveApiPath } from './backendConfig';
  */
 export async function getStrategyRecommendation(symbol: string) {
   try {
-    const response = await fetch(resolveApiPath('/tradingbot'), {
+    const response = await marketFetch('/tradingbot', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -65,7 +65,7 @@ export async function executeTrade(
       payload.takeProfitPercent = options.takeProfitPercent;
     }
     
-    const response = await fetch(resolveApiPath('/tradingbot/autopilot'), {
+    const response = await marketFetch('/tradingbot/autopilot', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -93,9 +93,7 @@ export async function executeTrade(
 export async function analyzeStock(symbol: string) {
   try {
     // Get trading signal from backend
-    const response = await fetch(
-      resolveApiPath(`/tradingbot/signal?symbol=${encodeURIComponent(symbol)}`),
-    );
+    const response = await marketFetch(`/tradingbot/signal?symbol=${encodeURIComponent(symbol)}`);
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -129,7 +127,7 @@ export async function analyzeStock(symbol: string) {
  */
 export async function getAccountInfo(mode: 'paper' | 'live' = 'paper') {
   try {
-    const response = await fetch(resolveApiPath(`/account?mode=${encodeURIComponent(mode)}`));
+    const response = await marketFetch(`/account?mode=${encodeURIComponent(mode)}`);
     
     if (!response.ok) {
       throw new Error(`HTTP error! status: ${response.status}`);
@@ -335,8 +333,8 @@ export async function scanStocksWithLowRSI(
       symbolsToScan.map(async (symbol) => {
         try {
           // Fetch historical data to calculate RSI
-          const historyResponse = await fetch(
-            resolveApiPath(`/alpha-history?symbol=${encodeURIComponent(symbol)}`),
+          const historyResponse = await marketFetch(
+            `/alpha-history?symbol=${encodeURIComponent(symbol)}`,
           );
           if (!historyResponse.ok) return null;
           const historyData = await historyResponse.json();
@@ -349,8 +347,8 @@ export async function scanStocksWithLowRSI(
           const rsi = calculateRSI(prices);
           
           // Fetch current quote
-          const quoteResponse = await fetch(
-            resolveApiPath(`/alpha-quotes?symbols=${encodeURIComponent(symbol)}`),
+          const quoteResponse = await marketFetch(
+            `/alpha-quotes?symbols=${encodeURIComponent(symbol)}`,
           );
           if (!quoteResponse.ok) return null;
           const quoteData = await quoteResponse.json();

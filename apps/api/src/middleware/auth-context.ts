@@ -6,6 +6,8 @@ import type { Role } from './require-role.js';
 const SUPABASE_JWT_SECRET = process.env.SUPABASE_JWT_SECRET;
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
+const HEADER_SUPABASE_URL = 'x-supabase-url';
+const HEADER_SUPABASE_KEY = 'x-supabase-key';
 
 type MaybeArray<T> = T | T[] | undefined;
 
@@ -60,17 +62,31 @@ function isTradingRequest(req: Request): boolean {
   return TRADING_PREFIXES.some(prefix => url.startsWith(prefix));
 }
 
-async function fetchSupabaseUser(token: string) {
-  if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
+function firstHeaderValue(value: MaybeArray<string>): string | undefined {
+  if (Array.isArray(value)) return value[0];
+  return value;
+}
+
+function resolveSupabaseConfig(req: Request) {
+  const headerUrl = firstHeaderValue(req.headers[HEADER_SUPABASE_URL] as MaybeArray<string>);
+  const headerKey = firstHeaderValue(req.headers[HEADER_SUPABASE_KEY] as MaybeArray<string>);
+  return {
+    url: headerUrl ?? SUPABASE_URL,
+    anonKey: headerKey ?? SUPABASE_ANON_KEY,
+  };
+}
+
+async function fetchSupabaseUser(token: string, config: { url?: string | null; anonKey?: string | null }) {
+  if (!config.url || !config.anonKey) {
     return null;
   }
 
   try {
-    const target = new URL('/auth/v1/user', SUPABASE_URL);
+    const target = new URL('/auth/v1/user', config.url);
     const response = await fetch(target, {
       headers: {
         Authorization: `Bearer ${token}`,
-        apikey: SUPABASE_ANON_KEY,
+        apikey: config.anonKey,
       },
     });
 
@@ -124,8 +140,10 @@ export async function attachAuthContext(req: Request, res: Response, next: NextF
       logger.warn('SUPABASE_JWT_SECRET not configured; falling back to Supabase introspection');
     }
 
+    const supabaseConfig = resolveSupabaseConfig(req);
+
     if (!payload) {
-      payload = await fetchSupabaseUser(token);
+      payload = await fetchSupabaseUser(token, supabaseConfig);
     }
 
     const userId = extractUserId(payload);

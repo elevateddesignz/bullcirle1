@@ -8,8 +8,7 @@ import React, {
 } from 'react';
 import { useEnvMode } from './EnvModeContext';
 import { analyzeStock, executeTrade, runTradingBot, findBestStrategy } from '../lib/tradingBotService';
-import { resolveApiPath } from '../lib/backendConfig';
-import { supabase } from '../lib/supabaseClient';
+import { marketFetch } from '../lib/api';
 
 export interface StartOpts {
   targetProfit: number;
@@ -67,36 +66,19 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
       return next.length > 300 ? next.slice(-300) : next;
     });
 
-  // Resolve Supabase session token to include in backend calls
-  const getHeaders = useCallback(async () => {
-    const baseHeaders = { 'Content-Type': 'application/json' };
-    try {
-      const {
-        data: { session },
-      } = await supabase.auth.getSession();
-      const token = session?.access_token;
-      return token ? { ...baseHeaders, Authorization: `Bearer ${token}` } : baseHeaders;
-    } catch (authError) {
-      console.warn('[AutoBot] Failed to read Supabase session for auth header', authError);
-      return baseHeaders;
-    }
-  }, []);
-
   // Fetch & return the latest equity
   const fetchEquity = useCallback(async (): Promise<number> => {
-    const headers = await getHeaders();
-    const res = await fetch(resolveApiPath(`/account?mode=${modeParam}`), { headers });
+    const res = await marketFetch(`/account?mode=${modeParam}`);
     if (!res.ok) throw new Error(`Equity HTTP ${res.status}`);
     const { account } = await res.json();
     const eq = parseFloat(account.equity);
     setEquity(eq);
     return eq;
-  }, [modeParam, getHeaders]);
+  }, [modeParam]);
 
   // One bot cycle
   const tick = useCallback(async () => {
     if (!runningRef.current) return;
-    const hdr = await getHeaders();
     const { targetProfit, stopLossPct, takeProfitPct } = optsRef.current;
 
     try {
@@ -108,7 +90,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
       addLog(`Equity: $${currentEq.toFixed(2)}`);
 
       // 2) Market hours check
-      const clockRes = await fetch(resolveApiPath(`/clock?mode=${modeParam}`), { headers: hdr });
+      const clockRes = await marketFetch(`/clock?mode=${modeParam}`);
       if (clockRes.ok) {
         const { is_open, next_open } = await clockRes.json();
         if (!is_open) {
@@ -187,7 +169,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [modeParam, fetchEquity, getHeaders]);
+  }, [modeParam, fetchEquity]);
 
   const start = (opts: StartOpts) => {
     if (runningRef.current) return;

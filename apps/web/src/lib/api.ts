@@ -1,4 +1,4 @@
-import { supabase } from './supabaseClient';
+import { supabase, resolvedSupabaseUrl, resolvedSupabaseAnonKey } from './supabaseClient';
 import { resolveApiPath } from './backendConfig';
 import type { User, SubscriptionTier } from '../types';
 import type { EnvMode } from '../contexts/EnvModeContext';
@@ -65,6 +65,13 @@ async function getAuthHeaders(extra?: HeadersInit): Promise<HeadersRecord> {
     }
   } catch (error) {
     console.warn('Failed to resolve Supabase session for authenticated request', error);
+  }
+
+  if (resolvedSupabaseUrl) {
+    setHeader(headers, 'x-supabase-url', resolvedSupabaseUrl);
+  }
+  if (resolvedSupabaseAnonKey) {
+    setHeader(headers, 'x-supabase-key', resolvedSupabaseAnonKey);
   }
 
   return headers;

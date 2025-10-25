@@ -15,6 +15,9 @@ const isPlaceholder = (value: string) =>
 const supabaseUrl = isPlaceholder(rawSupabaseUrl) ? FALLBACK_SUPABASE_URL : rawSupabaseUrl;
 const supabaseAnonKey = rawSupabaseAnonKey || FALLBACK_SUPABASE_ANON_KEY;
 
+export const resolvedSupabaseUrl = supabaseUrl;
+export const resolvedSupabaseAnonKey = supabaseAnonKey;
+
 if (isPlaceholder(rawSupabaseUrl) || !rawSupabaseAnonKey) {
   console.warn(
     'Supabase environment variables are missing or placeholders. Using local development defaults. Update VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY for real data.',
