@@ -8,17 +8,29 @@ function stripTrailingSlash(url: string) {
 
 const normalizedEnvBackendUrl = envBackendUrl ? stripTrailingSlash(envBackendUrl) : '';
 
+function parseBooleanFlag(value: string | undefined | null) {
+  if (!value) return undefined;
+  const normalized = value.toString().trim().toLowerCase();
+  if (normalized === 'true' || normalized === '1') return true;
+  if (normalized === 'false' || normalized === '0') return false;
+  return undefined;
+}
+
 const useLocalApiFallback =
   (import.meta.env.VITE_USE_LOCAL_API ?? '').toString().toLowerCase() === 'true'
   || (import.meta.env.VITE_USE_LOCAL_API ?? '').toString() === '1';
 
+const devProxyFlag = parseBooleanFlag(import.meta.env.VITE_DEV_PROXY);
+const devProxyEnabled = Boolean(import.meta.env.DEV && (devProxyFlag ?? false));
+
 // When no explicit backend URL is configured, optionally fall back to the local API during development.
 const resolvedBackendBaseUrl =
-  normalizedEnvBackendUrl
+  (devProxyEnabled ? '' : normalizedEnvBackendUrl)
   || (import.meta.env.DEV && useLocalApiFallback ? 'http://localhost:3000' : '');
 
 export const backendBaseUrl = resolvedBackendBaseUrl;
 export const backendUrlConfigured = Boolean(normalizedEnvBackendUrl);
+export const devProxyActive = devProxyEnabled;
 
 export function resolveBackendPath(path: string): string {
   if (ABSOLUTE_URL_REGEX.test(path)) {
