@@ -56,24 +56,23 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
   const runningRef = useRef(false);
   const optsRef    = useRef<StartOpts>({ targetProfit: 0, stopLossPct: 0, takeProfitPct: 0 });
 
-  const addLog = (msg: string) =>
+  const addLog = useCallback((msg: string) => {
     setLog(prev => {
       const next = [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`];
       return next.length > 300 ? next.slice(-300) : next;
     });
+  }, []);
 
-  const addStrategyLog = (msg: string) =>
+  const addStrategyLog = useCallback((msg: string) => {
     setStrategyLog(prev => {
       const next = [...prev, `[${new Date().toLocaleTimeString()}] ${msg}`];
       return next.length > 300 ? next.slice(-300) : next;
     });
+  }, []);
 
   const appendAuthWarning = useCallback(() => {
-    setLog(prev => {
-      const next = [...prev, `[${new Date().toLocaleTimeString()}] ⚠️ Login required to use Automation Bot`];
-      return next.length > 300 ? next.slice(-300) : next;
-    });
-  }, []);
+    addLog('⚠️ Login required to use Automation Bot');
+  }, [addLog]);
 
   const ensureAuthenticated = useCallback(() => {
     if (user) return true;
@@ -188,9 +187,9 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
     } finally {
       setBusy(false);
     }
-  }, [modeParam, fetchEquity, user]);
+  }, [modeParam, fetchEquity, user, addLog, addStrategyLog]);
 
-  const start = (opts: StartOpts) => {
+  const start = useCallback((opts: StartOpts) => {
     if (!ensureAuthenticated() || runningRef.current) return;
     optsRef.current    = opts;
     runningRef.current = true;
@@ -198,16 +197,16 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
     addLog(`▶ started [${envMode.toUpperCase()}]`);
     tick();
     timerRef.current = setInterval(tick, interval * 60_000);
-  };
+  }, [ensureAuthenticated, envMode, tick, interval, addLog]);
 
-  const stop = () => {
+  const stop = useCallback(() => {
     if (!runningRef.current) return;
     runningRef.current = false;
     if (timerRef.current) clearInterval(timerRef.current);
     setRunning(false);
     setBusy(false);
     addLog('⏹ stopped');
-  };
+  }, [addLog]);
 
   // react to interval change
   useEffect(() => {
