@@ -68,10 +68,24 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
       return next.length > 300 ? next.slice(-300) : next;
     });
 
+  const appendAuthWarning = useCallback(() => {
+    setLog(prev => {
+      const next = [...prev, `[${new Date().toLocaleTimeString()}] ⚠️ Login required to use Automation Bot`];
+      return next.length > 300 ? next.slice(-300) : next;
+    });
+  }, []);
+
+  const ensureAuthenticated = useCallback(() => {
+    if (user) return true;
+    setError('Login required');
+    appendAuthWarning();
+    return false;
+  }, [user, appendAuthWarning]);
+
   // Fetch & return the latest equity
   const fetchEquity = useCallback(async (): Promise<number> => {
     if (!user) {
-      throw new Error('Not authenticated');
+      throw new Error('Login required');
     }
     const res = await marketFetch(`/account?mode=${modeParam}`);
     if (!res.ok) throw new Error(`Equity HTTP ${res.status}`);
@@ -177,7 +191,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
   }, [modeParam, fetchEquity, user]);
 
   const start = (opts: StartOpts) => {
-    if (runningRef.current) return;
+    if (!ensureAuthenticated() || runningRef.current) return;
     optsRef.current    = opts;
     runningRef.current = true;
     setRunning(true);
@@ -206,16 +220,23 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
 
   // react to PAPER/LIVE toggle
   useEffect(() => {
-    if (user) {
-      fetchEquity();
+    if (!user) {
+      stop();
+      setEquity(0);
+      setBusy(false);
+      setError(null);
+      setLog([]);
+      setStrategyLog([]);
+      return;
     }
+    fetchEquity();
     if (runningRef.current) {
       if (timerRef.current) clearInterval(timerRef.current);
       addLog(`↻ mode → ${envMode.toUpperCase()}`);
       tick();
       timerRef.current = setInterval(tick, interval * 60_000);
     }
-  }, [envMode, fetchEquity, tick, interval, user]);
+  }, [envMode, fetchEquity, tick, interval, user, stop]);
 
   // initial equity load
   useEffect(() => {
@@ -225,7 +246,7 @@ export function AutoBotProvider({ children }: { children: React.ReactNode }) {
   }, [fetchEquity, user]);
 
   // cleanup on unmount
-  useEffect(() => () => stop(), []);
+  useEffect(() => () => stop(), [stop]);
 
   return (
     <Ctx.Provider
