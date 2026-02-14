@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { User } from '../types';
-import { api, supabase } from '../lib/api';
+import { api } from '../lib/api';
 import { Camera } from 'lucide-react';
 import imageCompression from 'browser-image-compression';
 import toast from 'react-hot-toast';
@@ -44,39 +44,8 @@ export default function Profile() {
     setError(null);
 
     try {
-      const options = { maxSizeMB: 1, maxWidthOrHeight: 800, useWebWorker: true, fileType: file.type as 'image/jpeg' | 'image/png' | 'image/gif' };
-      const compressedFile = await imageCompression(file, options);
-
-      const response = await fetch(`${import.meta.env.VITE_SUPABASE_URL}/functions/v1/create-bucket`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${(await supabase.auth.getSession()).data.session?.access_token}`,
-        },
-      });
-      if (!response.ok) {
-        throw new Error('Failed to ensure storage bucket exists');
-      }
-
-      const fileExt = file.name.split('.').pop();
-      const fileName = `${user.id}-${Date.now()}.${fileExt}`;
-
-      if (user.avatar_url) {
-        const oldFileName = user.avatar_url.split('/').pop();
-        if (oldFileName) {
-          await supabase.storage.from('avatars').remove([oldFileName]);
-        }
-      }
-
-      const { error: uploadError } = await supabase.storage.from('avatars').upload(fileName, compressedFile, { cacheControl: '3600', upsert: false });
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage.from('avatars').getPublicUrl(fileName);
-
-      const { error: updateError } = await supabase.from('profiles').update({ avatar_url: publicUrl }).eq('id', user.id);
-      if (updateError) throw updateError;
-
-      setUser(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
-      toast.success('Avatar updated successfully');
+      await imageCompression(file, { maxSizeMB: 1, maxWidthOrHeight: 800, useWebWorker: true, fileType: file.type as 'image/jpeg' | 'image/png' | 'image/gif' });
+      throw new Error('Avatar uploads are disabled until storage is configured.');
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload avatar');
       toast.error('Failed to update avatar');

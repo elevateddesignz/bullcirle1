@@ -14,6 +14,9 @@ import alpacaWebhookRouter from './routes/alpaca-webhook.js';
 import { marketRouter } from './routes/market.js';
 import { alpacaOAuthRouter } from './routes/alpaca-oauth.js';
 import supabaseProxyRouter from './routes/supabase-proxy.js';
+import authRouter from './routes/auth.js';
+import profileRouter from './routes/profile.js';
+import waitlistRouter from './routes/waitlist.js';
 
 type Mode = 'development' | 'production' | 'test';
 
@@ -72,6 +75,9 @@ app.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
+app.use('/api', authRouter);
+app.use('/api', profileRouter);
+app.use('/api', waitlistRouter);
 app.use('/api/v2/alpaca', alpacaRouter);
 app.use('/api/autopilot', autopilotRouter);
 app.use('/api', alphaRouter);

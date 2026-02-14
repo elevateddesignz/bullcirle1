@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Mail, ArrowRight, LogIn } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import { supabase } from '../lib/api';
+import { resolveApiPath } from '../lib/backendConfig';
 import toast from 'react-hot-toast';
 
 export default function Landing() {
@@ -13,25 +13,19 @@ export default function Landing() {
     setIsSubmitting(true);
 
     try {
-      // Check if email already exists
-      const { data: existingEmails } = await supabase
-        .from('waitlist')
-        .select('email')
-        .eq('email', email)
-        .limit(1);
+      const response = await fetch(resolveApiPath('/waitlist'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
 
-      if (existingEmails && existingEmails.length > 0) {
+      if (response.status === 409) {
         toast.error('This email is already on our waitlist.');
         return;
       }
 
-      // If email doesn't exist, insert it
-      const { error } = await supabase
-        .from('waitlist')
-        .insert([{ email }]);
-
-      if (error) {
-        throw error;
+      if (!response.ok) {
+        throw new Error('Failed to submit email');
       }
 
       toast.success('Thanks for signing up! We\'ll keep you updated.');

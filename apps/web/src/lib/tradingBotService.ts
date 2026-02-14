@@ -1,4 +1,3 @@
-import { supabase } from './supabaseClient';
 import { fetchMarketMovers } from './alphaVantage';
 import { marketFetch } from './api';
 
@@ -147,16 +146,19 @@ export async function getAccountInfo(mode: 'paper' | 'live' = 'paper') {
  */
 export async function getWatchlistSymbols() {
   try {
-    const { data, error } = await supabase
-      .from('watchlist')
-      .select('symbol');
-      
-    if (error) throw error;
-    
-    return data?.map(item => item.symbol) || [];
+    if (typeof window !== 'undefined') {
+      const stored = window.localStorage.getItem('bullcircle:watchlist');
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (Array.isArray(parsed) && parsed.length) {
+          return parsed;
+        }
+      }
+    }
+    return ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'AMZN'];
   } catch (error) {
     console.error('Error fetching watchlist:', error);
-    return ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'AMZN']; // Default symbols
+    return ['AAPL', 'MSFT', 'GOOGL', 'TSLA', 'AMZN'];
   }
 }
 

@@ -3,7 +3,6 @@ import { useNavigate, Link, useLocation } from 'react-router-dom';
 import { LogIn, ArrowLeft, Fingerprint, Smartphone, Monitor } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { webauthn } from '../lib/webauthn';
-import { supabase } from '../lib/supabaseClient';
 import toast from 'react-hot-toast';
 
 export default function Login() {
@@ -101,15 +100,8 @@ export default function Login() {
     setError(null);
 
     try {
-      // First login with password to get user ID
       await login(formData.email, formData.password);
-      
-      // Get current user
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) throw new Error('User not found after login');
-
-      // Setup biometric
-      await webauthn.register(user.id, formData.email);
+      await webauthn.register('local-user', formData.email);
       setHasCredentials(true);
       toast.success('Biometric authentication setup successfully!');
       

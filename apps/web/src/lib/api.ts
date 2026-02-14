@@ -1,10 +1,8 @@
-import { supabase, resolvedSupabaseUrl, resolvedSupabaseAnonKey } from './supabaseClient';
 import { resolveApiPath } from './backendConfig';
 import type { User, SubscriptionTier } from '../types';
 import type { EnvMode } from '../contexts/EnvModeContext';
 import { getEnvModeSnapshot } from '../contexts/EnvModeContext';
-
-export { supabase };
+import { getAccessToken } from './authStorage';
 
 const ABSOLUTE_URL_REGEX = /^https?:\/\//i;
 
@@ -55,23 +53,9 @@ function setHeader(headers: HeadersRecord, name: string, value: string) {
 async function getAuthHeaders(extra?: HeadersInit): Promise<HeadersRecord> {
   const headers = normalizeHeaders(extra);
 
-  try {
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-
-    if (session?.access_token) {
-      setHeader(headers, 'Authorization', `Bearer ${session.access_token}`);
-    }
-  } catch (error) {
-    console.warn('Failed to resolve Supabase session for authenticated request', error);
-  }
-
-  if (resolvedSupabaseUrl) {
-    setHeader(headers, 'x-supabase-url', resolvedSupabaseUrl);
-  }
-  if (resolvedSupabaseAnonKey) {
-    setHeader(headers, 'x-supabase-key', resolvedSupabaseAnonKey);
+  const token = getAccessToken();
+  if (token) {
+    setHeader(headers, 'Authorization', `Bearer ${token}`);
   }
 
   return headers;
@@ -163,96 +147,46 @@ interface ExecuteTradeParams {
 const jsonHeaders = { 'Content-Type': 'application/json' } as const;
 
 export const getProfile = async (): Promise<User> => {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('No user found');
+  const response = await tradeFetch('/profile');
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Failed to load profile');
   }
-
-  const { data: profile, error: profileError } = await supabase
-    .from('profiles')
-    .select('*')
-    .eq('id', user.id)
-    .single();
-  if (profileError) {
-    throw profileError;
-  }
-
-  const { data: subscriptions, error: subscriptionError } = await supabase
-    .from('user_subscriptions')
-    .select('*, subscription_tiers(*)')
-    .eq('user_id', user.id);
-  if (subscriptionError && subscriptionError.code !== 'PGRST116') {
-    throw subscriptionError;
-  }
-
-  return {
-    ...profile,
-    email: user.email ?? '',
-    joinDate: user.created_at ?? new Date().toISOString(),
-    tradingStats: {
-      totalTrades: 0,
-      winRate: 0,
-      profitLoss: 0,
-    },
-    user_subscriptions: subscriptions ?? undefined,
-  } as User;
+  return response.json() as Promise<User>;
 };
 
 export const getSubscriptionTiers = async (): Promise<SubscriptionTier[]> => {
-  const { data, error } = await supabase
-    .from('subscription_tiers')
-    .select('*')
-    .order('price', { ascending: true });
-  if (error) {
-    throw error;
+  const response = await fetch(resolveApiPath('/pricing-plans'));
+  if (!response.ok) {
+    return [];
   }
-  return data ?? [];
+  return response.json() as Promise<SubscriptionTier[]>;
 };
 
 export const upgradeTier = async (tierId: string) => {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('No user found');
+  const response = await tradeFetch('/subscriptions/upgrade', {
+    method: 'POST',
+    body: JSON.stringify({ tierId }),
+    headers: jsonHeaders,
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Upgrade failed');
   }
-
-  const { data, error } = await supabase
-    .from('user_subscriptions')
-    .update({
-      tier_id: tierId,
-      status: 'active',
-      current_period_start: new Date().toISOString(),
-      current_period_end: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
-    })
-    .eq('user_id', user.id)
-    .select()
-    .single();
-
-  if (error) {
-    throw error;
-  }
-
-  return data;
+  return response.json();
 };
 
 export const updateSettings = async (settings: Record<string, unknown>) => {
-  const {
-    data: { user },
-  } = await supabase.auth.getUser();
-  if (!user) {
-    throw new Error('No user found');
+  const response = await tradeFetch('/profile/settings', {
+    method: 'PATCH',
+    headers: jsonHeaders,
+    body: JSON.stringify({ settings }),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || 'Settings update failed');
   }
-
-  const { error } = await supabase
-    .from('profiles')
-    .update({ settings })
-    .eq('id', user.id);
-  if (error) {
-    throw error;
-  }
+  return response.json();
 };
 
 export const getMarketQuote = async (symbol: string, market?: string): Promise<MarketQuote> => {

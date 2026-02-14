@@ -27,6 +27,7 @@
     "@aws-sdk/client-kms": "^3.632.0",
     "@prisma/client": "^5.20.0",
     "@supabase/supabase-js": "^2.45.0",
+    "argon2": "^0.31.2",
     "axios": "^1.7.5",
     "cors": "^2.8.5",
     "dotenv": "^16.5.0",

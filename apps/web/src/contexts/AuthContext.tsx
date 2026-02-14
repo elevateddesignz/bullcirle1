@@ -1,13 +1,20 @@
 // src/contexts/AuthContext.tsx
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { User } from '@supabase/supabase-js';
 import toast from 'react-hot-toast';
-import { supabase } from '../lib/supabaseClient'; // Use the singleton here
+import { resolveApiPath } from '../lib/backendConfig';
+import { getAccessToken, getRefreshToken, setTokens, clearTokens } from '../lib/authStorage';
+
+export interface AuthUser {
+  id: string;
+  email: string;
+  displayName?: string | null;
+  roles?: string[];
+}
 
 interface AuthContextType {
   isAuthenticated: boolean;
-  user: User | null;
+  user: AuthUser | null;
   login: (email: string, password: string) => Promise<void>;
   register: (email: string, password: string, username: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -15,42 +22,85 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
+async function authFetch(path: string, init?: RequestInit) {
+  const response = await fetch(resolveApiPath(path), {
+    ...init,
+    headers: {
+      'Content-Type': 'application/json',
+      ...(init?.headers ?? {}),
+    },
+  });
+  return response;
+}
+
+async function fetchMe(accessToken: string): Promise<AuthUser | null> {
+  const response = await fetch(resolveApiPath('/auth/me'), {
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+    },
+  });
+  if (!response.ok) {
+    return null;
+  }
+  return response.json();
+}
+
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(null);
   const [isInitialLoad, setIsInitialLoad] = useState(true);
   const navigate = useNavigate();
 
   useEffect(() => {
-    // Check current session on mount.
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setIsAuthenticated(!!session);
-      setUser(session?.user ?? null);
-      setIsInitialLoad(false);
-    });
-
-    // Listen for auth state changes.
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-      setIsAuthenticated(!!session);
-      setUser(session?.user ?? null);
-      if (!isInitialLoad) {
-        if (event === 'SIGNED_IN') {
-          toast.success('Successfully signed in!');
-        } else if (event === 'SIGNED_OUT') {
-          toast.success('Successfully signed out!');
+    const hydrate = async () => {
+      const accessToken = getAccessToken();
+      const refreshToken = getRefreshToken();
+      if (accessToken) {
+        const me = await fetchMe(accessToken);
+        if (me) {
+          setUser(me);
+          setIsAuthenticated(true);
+          setIsInitialLoad(false);
+          return;
         }
       }
-    });
 
-    return () => {
-      subscription.unsubscribe();
+      if (refreshToken) {
+        const response = await authFetch('/auth/refresh', {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken }),
+        });
+        if (response.ok) {
+          const data = await response.json();
+          setTokens(data.accessToken, data.refreshToken);
+          setUser(data.user ?? null);
+          setIsAuthenticated(true);
+        } else {
+          clearTokens();
+        }
+      }
+
+      setIsInitialLoad(false);
     };
-  }, [isInitialLoad]);
+
+    void hydrate();
+  }, []);
 
   const login = async (email: string, password: string) => {
     try {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) throw error;
+      const response = await authFetch('/auth/login', {
+        method: 'POST',
+        body: JSON.stringify({ email, password }),
+      });
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Login failed');
+      }
+      const data = await response.json();
+      setTokens(data.accessToken, data.refreshToken);
+      setUser(data.user ?? null);
+      setIsAuthenticated(true);
+      toast.success('Successfully signed in!');
       navigate('/dashboard');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Login failed';
@@ -61,23 +111,20 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const register = async (email: string, password: string, username: string) => {
     try {
-      // Check if username exists.
-      const { count, error: countError } = await supabase
-        .from('profiles')
-        .select('username', { count: 'exact', head: true })
-        .eq('username', username);
-
-      if (countError) throw countError;
-      if (count && count > 0) throw new Error('Username is already taken');
-
-      const { error: signUpError } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { data: { username } },
+      const response = await authFetch('/auth/register', {
+        method: 'POST',
+        body: JSON.stringify({ email, password, username, displayName: username }),
       });
-      if (signUpError) throw signUpError;
-      toast.success('Registration successful! You can now log in.');
-      navigate('/login');
+      if (!response.ok) {
+        const message = await response.text();
+        throw new Error(message || 'Registration failed');
+      }
+      const data = await response.json();
+      setTokens(data.accessToken, data.refreshToken);
+      setUser(data.user ?? null);
+      setIsAuthenticated(true);
+      toast.success('Registration successful!');
+      navigate('/dashboard');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Registration failed';
       toast.error(message);
@@ -87,16 +134,27 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   const logout = async () => {
     try {
-      const { error } = await supabase.auth.signOut();
-      if (error) throw error;
+      const refreshToken = getRefreshToken();
+      if (refreshToken) {
+        await authFetch('/auth/logout', {
+          method: 'POST',
+          body: JSON.stringify({ refreshToken }),
+        });
+      }
+      clearTokens();
       setIsAuthenticated(false);
       setUser(null);
+      toast.success('Successfully signed out!');
       navigate('/login');
     } catch (error) {
       console.error('Error logging out:', error);
       toast.error('Failed to log out');
     }
   };
+
+  if (isInitialLoad) {
+    return <>{children}</>;
+  }
 
   return (
     <AuthContext.Provider value={{ isAuthenticated, user, login, register, logout }}>

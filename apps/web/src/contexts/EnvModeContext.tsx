@@ -1,7 +1,5 @@
 import { createContext, useContext, useState, ReactNode, useEffect } from 'react';
 
-import { supabase } from '../lib/supabaseClient';
-
 /**
  * Trading environment mode.
  *
@@ -34,21 +32,6 @@ const EnvModeContext = createContext<EnvModeContextType>({
 
 EnvModeContext.displayName = 'EnvModeContext';
 
-async function persistPreference(mode: EnvMode) {
-  try {
-    const {
-      data: { user },
-    } = await supabase.auth.getUser();
-    if (!user) return;
-    await supabase
-      .from('profiles')
-      .update({ env_mode: mode })
-      .eq('id', user.id);
-  } catch (error) {
-    console.error('Failed to persist env mode', error);
-  }
-}
-
 export function EnvModeProvider({ children }: { children: ReactNode }) {
   const [envMode, setEnvMode] = useState<EnvMode>('paper');
   const [isSyncing, setIsSyncing] = useState(false);
@@ -60,33 +43,7 @@ export function EnvModeProvider({ children }: { children: ReactNode }) {
     if (stored === 'paper' || stored === 'live') {
       envModeSnapshot = stored;
       setEnvMode(stored);
-      return;
     }
-
-    const loadPreference = async () => {
-      try {
-        const {
-          data: { user },
-        } = await supabase.auth.getUser();
-        if (!user) return;
-        const { data } = await supabase
-          .from('profiles')
-          .select('env_mode')
-          .eq('id', user.id)
-          .maybeSingle();
-        if (data?.env_mode === 'paper' || data?.env_mode === 'live') {
-          envModeSnapshot = data.env_mode;
-          setEnvMode(data.env_mode);
-          if (typeof window !== 'undefined') {
-            window.localStorage.setItem(STORAGE_KEY, data.env_mode);
-          }
-        }
-      } catch (error) {
-        console.warn('Failed to load env mode preference', error);
-      }
-    };
-
-    void loadPreference();
   }, []);
 
   const setEnvModeExplicit = async (mode: EnvMode) => {
@@ -95,8 +52,6 @@ export function EnvModeProvider({ children }: { children: ReactNode }) {
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(STORAGE_KEY, mode);
     }
-    setIsSyncing(true);
-    await persistPreference(mode);
     setIsSyncing(false);
   };
 

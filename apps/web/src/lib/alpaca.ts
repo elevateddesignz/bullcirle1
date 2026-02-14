@@ -1,17 +1,14 @@
-import { supabase } from './api';
 import { createApiUrl } from './backendConfig';
+import { getAccessToken } from './authStorage';
 
 async function getAuthHeaders() {
-  const {
-    data: { session },
-  } = await supabase.auth.getSession();
-
-  if (!session?.access_token) {
+  const token = getAccessToken();
+  if (!token) {
     throw new Error('Authentication required for Alpaca market data');
   }
 
   return {
-    Authorization: `Bearer ${session.access_token}`,
+    Authorization: `Bearer ${token}`,
   } satisfies Record<string, string>;
 }
 

@@ -23,16 +23,37 @@ enum BrokerEnv {
 }
 
 model User {
-  id                String             @id
+  id                String             @id @default(uuid())
   email             String             @unique
+  username          String?            @unique
+  passwordHash      String
   roles             UserRole[]         @default([free])
   displayName       String?
   avatarUrl         String?
+  settings          Json?
   isEmailVerified   Boolean            @default(false)
   brokerConnections BrokerConnection[]
+  sessions          AuthSession[]
   createdAt         DateTime           @default(now())
   updatedAt         DateTime           @updatedAt
   TradeAuditLog     TradeAuditLog[]
+}
+
+model AuthSession {
+  id               String   @id @default(uuid())
+  userId           String
+  refreshTokenHash String
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  createdAt        DateTime @default(now())
+  lastUsedAt       DateTime?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+  @@map("auth_sessions")
 }
 
 model BrokerConnection {
@@ -153,4 +174,12 @@ model TradeAuditLog {
 
   @@index([userId, createdAt])
   @@map("trade_audit_logs")
+}
+
+model WaitlistEntry {
+  id        String   @id @default(uuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+
+  @@map("waitlist_entries")
 }
